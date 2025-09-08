@@ -39,9 +39,7 @@ export function convertJsonSchemaToHarmonyTypeScript(tools: Tool[]): string {
     return "";
   }
 
-  const convertProperty = (
-    prop: JsonSchemaProperty
-  ): string => {
+  const convertProperty = (prop: JsonSchemaProperty): string => {
     let type = "";
 
     switch (prop.type) {
@@ -136,18 +134,20 @@ interface RawParsedMessage {
 
 // Convert raw parsed messages to proper Message format
 // Ensures all harmony channels (analysis, commentary, final) and tags are properly handled
-function convertRawMessagesToMessages(rawMessages: RawParsedMessage[]): Message[] {
-  return rawMessages.map(raw => {
+function convertRawMessagesToMessages(
+  rawMessages: RawParsedMessage[]
+): Message[] {
+  return rawMessages.map((raw) => {
     const message: Message = {
       role: raw.role as Role,
-      content: [{ type: "text" as const, text: raw.content }]
+      content: [{ type: "text" as const, text: raw.content }],
     };
-    
+
     // Preserve all harmony metadata
     if (raw.channel) message.channel = raw.channel;
-    if (raw.recipient) message.recipient = raw.recipient; 
+    if (raw.recipient) message.recipient = raw.recipient;
     if (raw.name) message.name = raw.name;
-    
+
     return message;
   });
 }
@@ -157,7 +157,11 @@ export async function prompt(config: {
   tools?: Tool[];
   reasoningEffort?: "low" | "medium" | "high";
   apiKey: string;
-}): Promise<{ messages: Message[]; inputTokens: number; outputTokens: number }> {
+}): Promise<{
+  messages: Message[];
+  inputTokens: number;
+  outputTokens: number;
+}> {
   try {
     // 1. Load harmony encoding
     const encoding = await load_harmony_encoding("HarmonyGptOss");
@@ -199,42 +203,56 @@ export async function prompt(config: {
     // 6. Convert tokens to string for the API
     const promptText = encoding.decodeUtf8(inputTokensArray);
 
-
-    const response = await fetch(
-      "https://api.fireworks.ai/inference/v1/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${config.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "accounts/fireworks/models/gpt-oss-120b",
-          prompt: promptText,
-          max_tokens: 2048,
-        }),
-      }
+    // Log the prompt being sent
+    fs.appendFileSync(
+      logPath,
+      `=== PROMPT SENT ===\n${promptText}\n=================\n\n`
     );
 
+    const response = await fetch("https://api.together.xyz/v1/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "openai/gpt-oss-120b",
+        prompt: promptText,
+        max_tokens: 2048,
+      }),
+    });
+
     if (!response.ok) {
+      const errorText = await response.text();
       throw new Error(
-        `Fireworks API request failed: ${response.status} ${response.statusText}`
+        `Together API request failed: ${response.status} ${response.statusText}. Response: ${errorText}`
       );
     }
 
     const completion = await response.json();
 
+    // Log the API response for debugging
+    fs.appendFileSync(
+      logPath,
+      `=== API RESPONSE ===\n${JSON.stringify(completion, null, 2)}\n==================\n\n`
+    );
 
     // 8. Extract completion content and usage from response
     const completionContent = completion.choices[0].text;
     const inputTokens = completion.usage?.prompt_tokens || 0;
     const outputTokens = completion.usage?.completion_tokens || 0;
 
+    // Log the raw completion content
+    fs.appendFileSync(
+      logPath,
+      `=== RAW COMPLETION ===\n${completionContent}\n====================\n\n`
+    );
+
     if (!completionContent) {
       throw new Error("No completion content received from Together AI");
     }
 
-    // 9. Parse harmony response using openai-harmony  
+    // 9. Parse harmony response using openai-harmony
     let parsedMessages: Message[];
 
     // Fix incomplete harmony responses by ensuring they end with <|end|>
@@ -257,12 +275,10 @@ export async function prompt(config: {
       fullTokens.set(inputTokensArray, 0);
       fullTokens.set(completionTokens, inputTokensArray.length);
 
-
       // Parse the complete conversation tokens as messages
       const parsedResult =
         encoding.parseMessagesFromCompletionTokens(fullTokens);
-      
-      
+
       const rawParsedMessages = JSON.parse(parsedResult) as RawParsedMessage[];
       parsedMessages = convertRawMessagesToMessages(rawParsedMessages);
     } catch (error) {
@@ -281,13 +297,12 @@ export async function prompt(config: {
     // Process only the NEW assistant messages from the response
     const newMessages = parsedMessages.slice(originalMessageCount);
 
-
     // Log comprehensive harmony response analysis
     const responseAnalysis = {
       timestamp: new Date().toISOString(),
       totalNewMessages: newMessages.length,
       messagesByChannel: newMessages.reduce((acc, msg) => {
-        const channel = msg.channel || 'no-channel';
+        const channel = msg.channel || "no-channel";
         acc[channel] = (acc[channel] || 0) + 1;
         return acc;
       }, {} as Record<string, number>),
@@ -295,23 +310,31 @@ export async function prompt(config: {
         acc[msg.role] = (acc[msg.role] || 0) + 1;
         return acc;
       }, {} as Record<string, number>),
-      allMessages: newMessages.map(msg => {
+      allMessages: newMessages.map((msg) => {
         const firstContent = msg.content[0];
-        const text = firstContent && 'text' in firstContent ? firstContent.text : JSON.stringify(firstContent);
+        const text =
+          firstContent && "text" in firstContent
+            ? firstContent.text
+            : JSON.stringify(firstContent);
         return {
           role: msg.role,
           channel: msg.channel,
           recipient: msg.recipient,
           name: msg.name,
-          contentPreview: text?.substring(0, 100) + (text && text.length > 100 ? '...' : ''),
-          fullContent: text
+          contentPreview:
+            text?.substring(0, 100) + (text && text.length > 100 ? "..." : ""),
+          fullContent: text,
         };
-      })
+      }),
     };
-    
+
     fs.appendFileSync(
       logPath,
-      `=== HARMONY RESPONSE ===\n${JSON.stringify(responseAnalysis, null, 2)}\n========================\n\n`
+      `=== HARMONY RESPONSE ===\n${JSON.stringify(
+        responseAnalysis,
+        null,
+        2
+      )}\n========================\n\n`
     );
 
     // Return all new messages (no role filtering needed)

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput } from "ink";
-import { CustomTextInput, CustomTextInputRef } from './CustomTextInput';
-import { GitRepoInfo } from '../types';
+import { CustomTextInput, CustomTextInputRef } from './CustomTextInput.js';
+import { GitRepoInfo } from '../types.js';
 
 interface InputFieldProps {
   onSubmit: (value: string) => void;
@@ -17,6 +17,7 @@ export const InputField: React.FC<InputFieldProps> = ({ onSubmit, focusNext, git
   const [topRepo, setTopRepo] = useState<GitRepoInfo | null>(null);
   const [cursorPosition, setCursorPosition] = useState(0);
   const [showSubmitError, setShowSubmitError] = useState(false);
+  const [justInsertedRepo, setJustInsertedRepo] = useState(false);
   const textInputRef = useRef<CustomTextInputRef>(null);
   
   useEffect(() => {
@@ -24,6 +25,12 @@ export const InputField: React.FC<InputFieldProps> = ({ onSubmit, focusNext, git
     if (!isFocused) {
       setShowRepoSuggestion(false);
       setTopRepo(null);
+      return;
+    }
+
+    // Skip mention detection if we just inserted a repo (prevent immediate re-trigger)
+    if (justInsertedRepo) {
+      setJustInsertedRepo(false);
       return;
     }
 
@@ -107,17 +114,46 @@ export const InputField: React.FC<InputFieldProps> = ({ onSubmit, focusNext, git
 
   const handleRepoSelection = () => {
     if (showRepoSuggestion && topRepo) {
-      // Insert suggested repo name, keeping the @ symbol
+      // Find the extent of the current mention text to replace
+      const textBeforeCursor = input.substring(0, cursorPosition);
+      const textAfterCursor = input.substring(cursorPosition);
+      
+      // Find where the mention starts and ends
       const beforeAt = input.substring(0, atPosition);
-      const spaceAfterAt = input.indexOf(' ', atPosition);
-      const afterRepoText = spaceAfterAt === -1 ? '' : input.substring(spaceAfterAt);
-      const newInput = beforeAt + '@' + topRepo.folderName + ' ' + afterRepoText;
-      setInput(newInput);
+      
+      // Find the end of the current mention (either space or end of input)
+      let mentionEndPos = cursorPosition;
+      for (let i = atPosition + 1; i < input.length; i++) {
+        if (input[i] === ' ') {
+          mentionEndPos = i;
+          break;
+        }
+        if (i === input.length - 1) {
+          mentionEndPos = input.length;
+        }
+      }
+      
+      const afterMentionText = input.substring(mentionEndPos);
+      const newInput = beforeAt + '@' + topRepo.folderName + ' ' + afterMentionText;
+      
+      // Set cursor position after the inserted repo name and space
+      const newCursorPos = beforeAt.length + 1 + topRepo.folderName.length + 1; // +1 for @, +1 for space
+      
+      // Update everything in the correct order to prevent mention detection from re-triggering
+      setJustInsertedRepo(true);
       setShowRepoSuggestion(false);
       setTopRepo(null);
-      // Set cursor position after the inserted repo name
-      const newCursorPos = beforeAt.length + topRepo.folderName.length + 2; // +2 for @ and space
+      setInput(newInput);
       setCursorPosition(newCursorPos);
+      
+      // Force cursor update through multiple mechanisms
+      setTimeout(() => {
+        // Try both parent state and ref
+        setCursorPosition(newCursorPos);
+        if (textInputRef.current) {
+          textInputRef.current.setCursor(newCursorPos);
+        }
+      }, 10); // Small delay to ensure input is processed
       return true;
     }
     return false;

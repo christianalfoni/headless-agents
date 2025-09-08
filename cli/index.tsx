@@ -4,7 +4,8 @@ import { CodeSandbox } from "@codesandbox/sdk";
 import chalk from "chalk";
 import React, { useState, useEffect } from "react";
 import { render } from "ink";
-import { App } from "./components/App";
+import { App } from "./components/App.js";
+import inquirer from "inquirer";
 import {
   SessionState,
   GitRepoInfo,
@@ -12,13 +13,14 @@ import {
   SessionData,
   IPromptSession,
   RepoWithBranch,
-} from "./types";
+} from "./types.js";
 import fs from "fs";
 import path from "path";
 import os from "os";
 import { execSync } from "child_process";
 import { v4 as uuidv4 } from "uuid";
 import process from "process";
+import crypto from "crypto";
 
 class PromptSession implements IPromptSession {
   public id: string;
@@ -171,6 +173,14 @@ class AgentChat {
   private inkApp: any = null;
   private setSessionsState: ((sessions: PromptSession[]) => void) | null = null;
 
+  // Git token management
+  private gitTokenFile: string;
+  private gitToken: string | null = null;
+
+  // Together API key management
+  private togetherApiKeyFile: string;
+  private togetherApiKey: string | null = null;
+
   constructor(
     provider: string = "together",
     searchPath: string = process.cwd()
@@ -193,13 +203,21 @@ class AgentChat {
     // Session management properties
     this.sessions = new Map();
     this.currentSession = null;
-    this.sessionsFile = path.join(
-      os.homedir(),
-      ".headless-agent-sessions.json"
-    );
+
+    // Create .together-tasks directory if it doesn't exist
+    const togetherTasksDir = path.join(os.homedir(), ".together-tasks");
+    if (!fs.existsSync(togetherTasksDir)) {
+      fs.mkdirSync(togetherTasksDir, { recursive: true });
+    }
+
+    this.sessionsFile = path.join(togetherTasksDir, "sessions.json");
+    this.gitTokenFile = path.join(togetherTasksDir, "git-token");
+    this.togetherApiKeyFile = path.join(togetherTasksDir, "together-key");
 
     this.loadSessions();
-    this.startInkApp();
+    this.loadGitToken();
+    this.loadTogetherApiKey();
+    this.checkOnboarding();
   }
 
   private generateBranchName(prompt: string, repoInfo?: GitRepoInfo): string {
@@ -321,6 +339,228 @@ class AgentChat {
   private deleteSession(sessionId: string): void {
     this.sessions.delete(sessionId);
     this.saveSessions();
+  }
+
+  private encryptToken(token: string): string {
+    const key = crypto.scryptSync("headless-agent-secret", "salt", 24);
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv("aes192", key, iv);
+    let encrypted = cipher.update(token, "utf8", "hex");
+    encrypted += cipher.final("hex");
+    return iv.toString("hex") + ":" + encrypted;
+  }
+
+  private decryptToken(encryptedToken: string): string {
+    const key = crypto.scryptSync("headless-agent-secret", "salt", 24);
+    const [ivHex, encryptedHex] = encryptedToken.split(":");
+    const iv = Buffer.from(ivHex, "hex");
+    const decipher = crypto.createDecipheriv("aes192", key, iv);
+    let decrypted = decipher.update(encryptedHex, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+    return decrypted;
+  }
+
+  private loadGitToken(): void {
+    try {
+      if (fs.existsSync(this.gitTokenFile)) {
+        const encryptedToken = fs.readFileSync(this.gitTokenFile, "utf8");
+        this.gitToken = this.decryptToken(encryptedToken);
+      }
+    } catch (error: any) {
+      console.error("Failed to load git token:", error.message);
+      this.gitToken = null;
+    }
+  }
+
+  private saveGitToken(token: string): void {
+    try {
+      const encryptedToken = this.encryptToken(token);
+      fs.writeFileSync(this.gitTokenFile, encryptedToken, { mode: 0o600 });
+      this.gitToken = token;
+    } catch (error: any) {
+      console.error("Failed to save git token:", error.message);
+    }
+  }
+
+  private loadTogetherApiKey(): void {
+    try {
+      if (fs.existsSync(this.togetherApiKeyFile)) {
+        const encryptedKey = fs.readFileSync(this.togetherApiKeyFile, "utf8");
+        this.togetherApiKey = this.decryptToken(encryptedKey);
+      }
+    } catch (error: any) {
+      console.error("Failed to load Together API key:", error.message);
+      this.togetherApiKey = null;
+    }
+  }
+
+  private saveTogetherApiKey(apiKey: string): void {
+    try {
+      const encryptedKey = this.encryptToken(apiKey);
+      fs.writeFileSync(this.togetherApiKeyFile, encryptedKey, { mode: 0o600 });
+      this.togetherApiKey = apiKey;
+    } catch (error: any) {
+      console.error("Failed to save Together API key:", error.message);
+    }
+  }
+
+  private async checkOnboarding(): Promise<void> {
+    const hasGitToken = !!this.gitToken;
+    const hasTogetherApiKey = !!this.togetherApiKey;
+
+    if (hasGitToken && hasTogetherApiKey) {
+      this.startInkApp();
+      return;
+    }
+
+    // Show onboarding for missing credentials
+    if (!hasGitToken && !hasTogetherApiKey) {
+      await this.showCompleteOnboarding();
+    } else if (!hasGitToken) {
+      await this.showGitTokenOnboarding();
+    } else if (!hasTogetherApiKey) {
+      await this.showTogetherApiKeyOnboarding();
+    }
+  }
+
+  private async showGitTokenOnboarding(): Promise<void> {
+    console.clear();
+    console.log(chalk.blue.bold("🔐 GitHub Token Setup"));
+    console.log();
+    console.log("This CLI needs a GitHub token to:");
+    console.log("• Clone repositories");
+    console.log("• Create commits");
+    console.log("• Push branches");
+    console.log();
+    console.log(
+      chalk.cyan("https://github.com/settings/personal-access-tokens")
+    );
+    console.log();
+
+    // Import inquirer dynamically to handle input
+
+    let answers;
+    try {
+      answers = await inquirer.prompt([
+        {
+          type: "password",
+          name: "token",
+          message: "Paste your GitHub token:",
+          mask: "*",
+          validate: (input: string) => {
+            if (!input || input.trim().length === 0) {
+              return "Token cannot be empty";
+            }
+            if (!input.match(/^(ghp_|gho_|ghu_|ghs_|ghr_)/)) {
+              return "Invalid GitHub token format";
+            }
+            return true;
+          },
+        },
+      ]);
+    } catch (error: any) {
+      if (error.name === "ExitPromptError") {
+        console.log(chalk.yellow("\n\n👋 Goodbye!"));
+        process.exit(0);
+      }
+      throw error;
+    }
+
+    this.saveGitToken(answers.token.trim());
+    console.log();
+    console.log(chalk.green("✅ GitHub token saved securely!"));
+    console.log();
+
+    // Short delay before checking if we need Together API key
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Check if we also need Together API key
+    if (!this.togetherApiKey) {
+      await this.showTogetherApiKeyOnboarding();
+    } else {
+      this.startInkApp();
+    }
+  }
+
+  private async showTogetherApiKeyOnboarding(): Promise<void> {
+    console.clear();
+    console.log(chalk.blue.bold("🤖 Together API Key Setup"));
+    console.log();
+    console.log("This CLI needs a Together API key to:");
+    console.log("• Access AI models via CodeSandbox SDK");
+    console.log("• Execute agent tasks in sandboxes");
+    console.log("• Generate intelligent responses");
+    console.log();
+    console.log(chalk.cyan("https://api.together.xyz/settings/api-keys"));
+    console.log();
+
+    let answers;
+    try {
+      answers = await inquirer.prompt([
+        {
+          type: "password",
+          name: "apiKey",
+          message: "Paste your Together API key:",
+          mask: "*",
+          validate: (input: string) => {
+            if (!input || input.trim().length === 0) {
+              return "API key cannot be empty";
+            }
+            if (input.trim().length < 20) {
+              return "API key seems too short. Please check and try again.";
+            }
+            return true;
+          },
+        },
+      ]);
+    } catch (error: any) {
+      if (error.name === "ExitPromptError") {
+        console.log(chalk.yellow("\n\n👋 Goodbye!"));
+        process.exit(0);
+      }
+      throw error;
+    }
+
+    this.saveTogetherApiKey(answers.apiKey.trim());
+    console.log();
+    console.log(chalk.green("✅ Together API key saved securely!"));
+    console.log();
+
+    // Short delay before starting the app
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    this.startInkApp();
+  }
+
+  private async showCompleteOnboarding(): Promise<void> {
+    console.clear();
+    console.log(chalk.blue.bold("🚀 Welcome to Together Tasks CLI"));
+    console.log();
+    console.log("To get started, we need to set up two credentials:");
+    console.log();
+    console.log(
+      chalk.yellow("1. GitHub Token") + " - for repository operations"
+    );
+    console.log(chalk.yellow("2. Together API Key") + " - for AI model access");
+    console.log();
+    console.log("Press ENTER to continue...");
+
+    // Wait for ENTER key
+    await new Promise<void>((resolve) => {
+      const onData = (key: Buffer) => {
+        if (key.toString() === "\r" || key.toString() === "\n") {
+          process.stdin.removeListener("data", onData);
+          process.stdin.setRawMode(false);
+          process.stdin.pause();
+          resolve();
+        }
+      };
+
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      process.stdin.on("data", onData);
+    });
+
+    await this.showGitTokenOnboarding();
   }
 
   private detectGitRepos(): GitRepoInfo[] {
@@ -519,7 +759,7 @@ class AgentChat {
 
       const sdk = new CodeSandbox(apiKey);
       this.sandbox = await sdk.sandboxes.create({
-        id: "pt_FwkC47DP7M23Surs1rFEf1", // Template ID
+        id: "pt_HkkZUtNnuwYsMyqw5ihJZK", // Template ID
       });
 
       this.client = await this.sandbox.connect();
@@ -563,9 +803,9 @@ class AgentChat {
       workingDirectory: "/project/workspace",
     };
 
-    // Add GitHub token if available
-    if (process.env.GITHUB_TOKEN) {
-      (requestBody as any).githubToken = process.env.GITHUB_TOKEN;
+    // Add GitHub token (using stored token only)
+    if (this.gitToken) {
+      (requestBody as any).githubToken = this.gitToken;
     }
 
     // Add repository and branch info from session if available
@@ -845,17 +1085,30 @@ class AgentChat {
       // Add user prompt to conversation
       this.addToConversation("user_prompt", prompt);
 
-      // Get API key for the chosen provider
-      const apiKeyEnvVar =
-        this.provider === "anthropic"
-          ? "ANTHROPIC_API_KEY"
-          : this.provider === "openai"
-          ? "OPENAI_API_KEY"
-          : "TOGETHER_API_KEY";
-      const apiKey = process.env[apiKeyEnvVar];
+      // Get API key for the chosen provider (using stored Together key, env vars for others)
+      let apiKey: string | undefined;
+      if (this.provider === "anthropic") {
+        apiKey = process.env.ANTHROPIC_API_KEY;
+      } else if (this.provider === "openai") {
+        apiKey = process.env.OPENAI_API_KEY;
+      } else if (this.provider === "together") {
+        apiKey = this.togetherApiKey || undefined;
+      }
 
       if (!apiKey) {
-        throw new Error(`${apiKeyEnvVar} environment variable is required`);
+        if (this.provider === "together") {
+          throw new Error(
+            "Together API key not found. Please restart the CLI to set up credentials."
+          );
+        } else {
+          const keyName =
+            this.provider === "anthropic"
+              ? "ANTHROPIC_API_KEY"
+              : "OPENAI_API_KEY";
+          throw new Error(
+            `${keyName} environment variable is required for ${this.provider} provider`
+          );
+        }
       }
 
       // Start the query in the sandbox
@@ -1072,6 +1325,30 @@ class AgentChat {
   }
 }
 
+// Clear all persistent data
+function clearPersistence() {
+  const togetherTasksDir = path.join(os.homedir(), ".together-tasks");
+
+  try {
+    if (fs.existsSync(togetherTasksDir)) {
+      // Remove the entire directory and its contents
+      fs.rmSync(togetherTasksDir, { recursive: true, force: true });
+      console.log(
+        chalk.green(`✓ Cleared .together-tasks directory and all its contents`)
+      );
+      console.log(
+        chalk.green(`✓ All sessions, tokens, and cached data removed.`)
+      );
+    } else {
+      console.log(chalk.yellow("No .together-tasks directory found to clear."));
+    }
+  } catch (error: any) {
+    console.log(
+      chalk.red(`✗ Failed to clear .together-tasks directory: ${error.message}`)
+    );
+  }
+}
+
 // Parse command line arguments
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -1094,19 +1371,26 @@ function parseArgs() {
         process.exit(1);
       }
       i++; // Skip the next argument
+    } else if (args[i] === "--clear") {
+      clearPersistence();
+      process.exit(0);
     } else if (args[i] === "--help" || args[i] === "-h") {
-      console.log("Usage: node index.js [path] [--provider <provider>]");
+      console.log(
+        "Usage: node index.js [path] [--provider <provider>] [--clear]"
+      );
       console.log(
         "  path: Directory to search for git repositories (default: current directory)"
       );
       console.log(
         "  --provider: AI provider to use: anthropic, openai, or together (default: together)"
       );
+      console.log("  --clear: Clear all sessions, tokens, and cached data");
       console.log("\nExamples:");
       console.log("  node index.js .");
       console.log("  node index.js ..");
       console.log("  node index.js ./foo");
       console.log("  node index.js /path/to/projects --provider anthropic");
+      console.log("  node index.js --clear");
       process.exit(0);
     } else if (!args[i].startsWith("--") && i === 0) {
       // First non-option argument is the path

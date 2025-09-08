@@ -4,7 +4,7 @@ import open from "open";
 import path from "path";
 import { execSync } from "child_process";
 
-import { IPromptSession } from '../types';
+import { IPromptSession } from '../types.js';
 
 interface SessionsListProps {
   sessions: IPromptSession[];

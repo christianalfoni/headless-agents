@@ -1,10 +1,10 @@
 import React, { useState, useCallback } from "react";
 import { Box, Text, useInput, useApp } from "ink";
-import { InputField } from './InputField';
-import { SessionsList } from './SessionsList';
-import { MessagesView } from './MessagesView';
+import { InputField } from './InputField.js';
+import { SessionsList } from './SessionsList.js';
+import { MessagesView } from './MessagesView.js';
 
-import { GitRepoInfo, IPromptSession } from '../types';
+import { GitRepoInfo, IPromptSession } from '../types.js';
 
 interface AppProps {
   sessions: IPromptSession[];

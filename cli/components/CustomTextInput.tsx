@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, JSX } from "react";
 import { Box, Text, useInput } from "ink";
 
 interface CustomTextInputProps {
@@ -15,7 +15,7 @@ interface CustomTextInputProps {
   promptLabel?: string;
 }
 
-export const CustomTextInput: React.FC<CustomTextInputProps> = ({
+export const CustomTextInput = React.forwardRef<CustomTextInputRef, CustomTextInputProps>(({
   value,
   onChange,
   onSubmit,
@@ -27,7 +27,7 @@ export const CustomTextInput: React.FC<CustomTextInputProps> = ({
   onFocusNext,
   showRepoSuggestion,
   promptLabel
-}) => {
+}, ref) => {
   const [cursorPosition, setCursorPosition] = useState(value.length);
   const [showCursor, setShowCursor] = useState(true);
   const [lastEnterTime, setLastEnterTime] = useState(0);
@@ -44,6 +44,20 @@ export const CustomTextInput: React.FC<CustomTextInputProps> = ({
     }
   }, [value, cursorPosition]);
 
+  // Reset cursor position to end when value changes (for external updates like mention insertion)
+  const previousValueRef = useRef(value);
+  useEffect(() => {
+    // If value changed externally and cursor position wasn't set via parent
+    if (previousValueRef.current !== value && value.length !== previousValueRef.current.length) {
+      // Only reset to end if the change significantly changed the text length
+      const lengthDifference = Math.abs(value.length - previousValueRef.current.length);
+      if (lengthDifference > 2) { // More than just 1-2 characters changed
+        setCursorPosition(value.length);
+      }
+    }
+    previousValueRef.current = value;
+  }, [value]);
+
   // Notify parent of cursor position changes
   useEffect(() => {
     onCursorPositionChange?.(cursorPosition);
@@ -52,12 +66,21 @@ export const CustomTextInput: React.FC<CustomTextInputProps> = ({
   // Helper function to find word boundaries
   const findWordStart = (text: string, position: number): number => {
     let pos = position - 1;
-    while (pos >= 0 && /\S/.test(text[pos])) {
-      pos--;
+    
+    // If we're at the end of a word, first move to the start of the current word
+    if (pos >= 0 && /\S/.test(text[pos])) {
+      while (pos >= 0 && /\S/.test(text[pos])) {
+        pos--;
+      }
+      return pos + 1;
     }
+    
+    // If we're in whitespace, skip it and find the previous word
     while (pos >= 0 && /\s/.test(text[pos])) {
       pos--;
     }
+    
+    // Now find the start of the previous word
     while (pos >= 0 && /\S/.test(text[pos])) {
       pos--;
     }
@@ -85,13 +108,7 @@ export const CustomTextInput: React.FC<CustomTextInputProps> = ({
   useInput((inputText, key) => {
     if (!isFocused) return;
 
-    // Debug ALL key events to see what Shift+Enter produces
-    // console.log('ALL key events:', { 
-    //   inputText, 
-    //   inputTextLength: inputText?.length,
-    //   inputTextCharCode: inputText?.charCodeAt(0), 
-    //   key 
-    // });
+
 
     // Handle Enter key - check for repo selection first, then submit
     if (key.return) {
@@ -114,7 +131,6 @@ export const CustomTextInput: React.FC<CustomTextInputProps> = ({
 
     // Also handle Ctrl+Enter as alternative for newlines
     if (inputText === '\n' || (inputText === '\r' && key.ctrl)) {
-      console.log('Newline detected (Ctrl+Enter or literal newline)');
       const newValue = value.slice(0, cursorPosition) + '\n' + value.slice(cursorPosition);
       onChange(newValue);
       setCursorPosition(cursorPosition + 1);
@@ -144,14 +160,29 @@ export const CustomTextInput: React.FC<CustomTextInputProps> = ({
       return;
     }
 
-    // Handle Option+Arrow keys for word jumping
-    if (key.meta && key.leftArrow) {
+    // Handle CMD+Arrow keys for word jumping
+    // CMD+LEFT sends 'b' with meta:true, CMD+RIGHT sends 'f' with meta:true
+    if (inputText === 'b' && key.meta) {
       const newPosition = findWordStart(value, cursorPosition);
       setCursorPosition(newPosition);
       return;
     }
 
-    if (key.meta && key.rightArrow) {
+    if (inputText === 'f' && key.meta) {
+      const newPosition = findWordEnd(value, cursorPosition);
+      setCursorPosition(newPosition);
+      return;
+    }
+
+
+    // Alternative: Ctrl+B (backward) and Ctrl+F (forward) - Emacs-style
+    if (inputText === 'b' && key.ctrl) {
+      const newPosition = findWordStart(value, cursorPosition);
+      setCursorPosition(newPosition);
+      return;
+    }
+
+    if (inputText === 'f' && key.ctrl) {
       const newPosition = findWordEnd(value, cursorPosition);
       setCursorPosition(newPosition);
       return;
@@ -244,43 +275,93 @@ export const CustomTextInput: React.FC<CustomTextInputProps> = ({
     setCursorPosition(clampedPosition);
   };
 
-  // Attach setCursor to ref for parent access
-  useEffect(() => {
-    if (isFocused) {
-      (setCursor as any).current = setCursor;
-    }
-  }, [isFocused]);
+  // Expose setCursor method through ref
+  React.useImperativeHandle(ref, () => ({
+    setCursor
+  }));
 
-  // Render the text with cursor
+  // Render the text with cursor and text wrapping
   const renderTextWithCursor = () => {
     if (!value && !isFocused) {
       return <Text color="gray">{placeholder}</Text>;
     }
 
+    const terminalWidth = process.stdout.columns || 80;
+    const promptWidth = promptLabel ? promptLabel.length : 0;
+    // Account for app padding, margins, and cursor - reduced to allow more text
+    const uiOverhead = 12;
+    const availableWidth = Math.max(20, terminalWidth - promptWidth - uiOverhead);
+    
     const lines = (value || '').split('\n');
     let globalPosition = 0;
+    const renderLines: JSX.Element[] = [];
     
-    return (
-      <Box flexDirection="column">
-        {lines.map((line, lineIndex) => {
-          const lineStart = globalPosition;
-          const lineEnd = globalPosition + line.length;
-          globalPosition += line.length + 1; // +1 for newline
+    lines.forEach((line, lineIndex) => {
+      const lineStart = globalPosition;
+      const lineEnd = globalPosition + line.length;
+      
+      // Check if cursor is on this logical line
+      const cursorOnLine = cursorPosition >= lineStart && cursorPosition <= lineEnd;
+      const cursorInLine = cursorOnLine ? cursorPosition - lineStart : -1;
 
-          // Check if cursor is on this line
-          const cursorOnLine = cursorPosition >= lineStart && cursorPosition <= lineEnd;
-          const cursorInLine = cursorOnLine ? cursorPosition - lineStart : -1;
+      if (line.length <= availableWidth) {
+        // Line fits, render normally
+        renderLines.push(
+          <Box key={`${lineIndex}-0`} flexDirection="row" minHeight={1}>
+            {/* Show prompt label on first line only */}
+            {lineIndex === 0 && promptLabel && <Text>{promptLabel}</Text>}
+            {/* Add spacing on subsequent lines to align with prompt */}
+            {lineIndex > 0 && promptLabel && <Text>{promptLabel.replace(/./g, " ")}</Text>}
+            
+            {line.length > 0 ? (
+              line.split('').map((char, charIndex) => {
+                const isAtCursor = isFocused && cursorInLine === charIndex && showCursor;
+                return (
+                  <Text key={charIndex} inverse={isAtCursor}>
+                    {char}
+                  </Text>
+                );
+              })
+            ) : (
+              // Empty line - show cursor if on this line, otherwise show space for line height
+              isFocused && showCursor && cursorOnLine ? (
+                <Text color="white">▋</Text>
+              ) : (
+                <Text> </Text>
+              )
+            )}
+            {/* Show cursor at end of line (only for non-empty lines) */}
+            {isFocused && showCursor && cursorInLine === line.length && line.length > 0 && (
+              <Text color="white">▋</Text>
+            )}
+          </Box>
+        );
+      } else {
+        // Line needs wrapping
+        let remainingLine = line;
+        let wrapIndex = 0;
+        let lineOffset = 0;
 
-          return (
-            <Box key={lineIndex} flexDirection="row" minHeight={1}>
+        while (remainingLine.length > 0) {
+          const chunk = remainingLine.slice(0, availableWidth);
+          remainingLine = remainingLine.slice(availableWidth);
+          
+          // Check if cursor is in this chunk
+          const chunkStart = lineOffset;
+          const chunkEnd = lineOffset + chunk.length;
+          const cursorInChunk = cursorOnLine && cursorInLine >= chunkStart && cursorInLine <= chunkEnd;
+          const cursorInChunkPosition = cursorInChunk ? cursorInLine - chunkStart : -1;
+
+          renderLines.push(
+            <Box key={`${lineIndex}-${wrapIndex}`} flexDirection="row" minHeight={1}>
               {/* Show prompt label on first line only */}
-              {lineIndex === 0 && promptLabel && <Text>{promptLabel}</Text>}
+              {lineIndex === 0 && wrapIndex === 0 && promptLabel && <Text>{promptLabel}</Text>}
               {/* Add spacing on subsequent lines to align with prompt */}
-              {lineIndex > 0 && promptLabel && <Text>{promptLabel.replace(/./g, " ")}</Text>}
+              {(lineIndex > 0 || wrapIndex > 0) && promptLabel && <Text>{promptLabel.replace(/./g, " ")}</Text>}
               
-              {line.length > 0 ? (
-                line.split('').map((char, charIndex) => {
-                  const isAtCursor = isFocused && cursorInLine === charIndex && showCursor;
+              {chunk.length > 0 ? (
+                chunk.split('').map((char, charIndex) => {
+                  const isAtCursor = isFocused && cursorInChunkPosition === charIndex && showCursor;
                   return (
                     <Text key={charIndex} inverse={isAtCursor}>
                       {char}
@@ -288,20 +369,31 @@ export const CustomTextInput: React.FC<CustomTextInputProps> = ({
                   );
                 })
               ) : (
-                // Empty line - show cursor if on this line, otherwise show space for line height
-                isFocused && showCursor && cursorOnLine ? (
+                // Empty chunk - show cursor if at this position
+                isFocused && showCursor && cursorInChunk && cursorInChunkPosition === 0 ? (
                   <Text color="white">▋</Text>
                 ) : (
                   <Text> </Text>
                 )
               )}
-              {/* Show cursor at end of line (only for non-empty lines) */}
-              {isFocused && showCursor && cursorInLine === line.length && line.length > 0 && (
+              {/* Show cursor at end of chunk */}
+              {isFocused && showCursor && cursorInChunkPosition === chunk.length && (
                 <Text color="white">▋</Text>
               )}
             </Box>
           );
-        })}
+
+          lineOffset += chunk.length;
+          wrapIndex++;
+        }
+      }
+      
+      globalPosition += line.length + 1; // +1 for newline
+    });
+    
+    return (
+      <Box flexDirection="column">
+        {renderLines}
       </Box>
     );
   };
@@ -311,7 +403,7 @@ export const CustomTextInput: React.FC<CustomTextInputProps> = ({
       {renderTextWithCursor()}
     </Box>
   );
-};
+});
 
 // Export a ref type for parent components to control cursor
 export interface CustomTextInputRef {

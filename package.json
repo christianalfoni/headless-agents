@@ -1,7 +1,6 @@
 {
   "name": "together-tasks",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.0.4",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,7 +26,6 @@
     "test:run": "vitest run"
   },
   "devDependencies": {
-    "@codesandbox/sdk": "^2.2.0",
     "@types/inquirer": "^9.0.9",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^22.0.0",
@@ -41,6 +39,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "@codesandbox/sdk": "^2.2.0",
     "@ai-sdk/anthropic": "^2.0.5",
     "@ai-sdk/google": "^2.0.6",
     "@ai-sdk/mistral": "^2.0.5",
