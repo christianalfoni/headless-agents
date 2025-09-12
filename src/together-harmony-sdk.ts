@@ -169,28 +169,42 @@ export async function prompt(config: {
     // 2. Use input messages directly since they're already in harmony format
     const harmonyMessages: Message[] = config.messages;
 
-    // 3. Add reasoning effort to system message if provided
+    // 3. Add reasoning effort to system message if provided (only if not already added)
     if (config.reasoningEffort) {
       const systemMessage = harmonyMessages.find((m) => m.role === "system");
       if (systemMessage && systemMessage.content[0]?.type === "text") {
-        systemMessage.content[0].text += `\n<|reasoning|>${config.reasoningEffort.toUpperCase()}`;
+        const systemText = systemMessage.content[0].text;
+        // Only add reasoning effort if it hasn't been added already
+        if (!systemText.includes('<|reasoning|>')) {
+          systemMessage.content[0].text += `\n<|reasoning|>${config.reasoningEffort.toUpperCase()}`;
+        }
       }
     }
 
-    // 4. Add tools if provided
+    // 4. Add tools if provided (only if not already added)
     if (config.tools && config.tools.length > 0) {
-      const toolsMessage: Message = {
-        role: "developer",
-        content: [
-          {
-            type: "text" as const,
-            text: `# Tools\n${convertJsonSchemaToHarmonyTypeScript(
-              config.tools
-            )}`,
-          },
-        ],
-      };
-      harmonyMessages.unshift(toolsMessage);
+      // Check if tools have already been injected by looking for a developer role message with "# Tools"
+      const hasToolsMessage = harmonyMessages.some(
+        (msg) => 
+          msg.role === "developer" && 
+          msg.content[0]?.type === "text" && 
+          msg.content[0].text.startsWith("# Tools\n")
+      );
+      
+      if (!hasToolsMessage) {
+        const toolsMessage: Message = {
+          role: "developer",
+          content: [
+            {
+              type: "text" as const,
+              text: `# Tools\n${convertJsonSchemaToHarmonyTypeScript(
+                config.tools
+              )}`,
+            },
+          ],
+        };
+        harmonyMessages.unshift(toolsMessage);
+      }
     }
 
     // 5. Render conversation to tokens
@@ -209,18 +223,23 @@ export async function prompt(config: {
       `=== PROMPT SENT ===\n${promptText}\n=================\n\n`
     );
 
-    const response = await fetch("https://api.together.xyz/v1/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openai/gpt-oss-120b",
-        prompt: promptText,
-        max_tokens: 2048,
-      }),
-    });
+    const response = await fetch(
+      // "https://api.together.xyz/v1/completions",
+      "https://api.fireworks.ai/inference/v1/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          // model: "openai/gpt-oss-120b",
+          model: "accounts/fireworks/models/gpt-oss-120b",
+          prompt: promptText,
+          max_tokens: 2048,
+        }),
+      }
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -234,7 +253,11 @@ export async function prompt(config: {
     // Log the API response for debugging
     fs.appendFileSync(
       logPath,
-      `=== API RESPONSE ===\n${JSON.stringify(completion, null, 2)}\n==================\n\n`
+      `=== API RESPONSE ===\n${JSON.stringify(
+        completion,
+        null,
+        2
+      )}\n==================\n\n`
     );
 
     // 8. Extract completion content and usage from response
