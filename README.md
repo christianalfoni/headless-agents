@@ -15,7 +15,7 @@ npx together-tasks
 - **Repository Mentions**: Use `@repo-name` syntax to specify which repository to work on
 - **Task Management**: View, track, and delete previous tasks
 - **Real-time Updates**: Live progress tracking with task states and step counts
-- **Open Tasks Locally**: The agent will always push changes remotely on a branch you can directly open in your local environment
+- **Open Tasks Locally**: The agent will always push changes remotely on a branch you can directly open in your local environment (Tap "o")
 
 ## CLI Options
 
