@@ -1,44 +1,48 @@
 import { v4 as uuidv4 } from "uuid";
-import { Todo, Message } from "./types";
-import { SessionEnvironment } from "./Environment";
-import { streamPrompt } from "./prompt";
-import { WriteTodos } from "./tools/todos";
-import { Read } from "./tools/read";
-import { Bash } from "./tools/bash";
-import { Edit } from "./tools/edit";
-import { Glob } from "./tools/glob";
-import { Grep } from "./tools/grep";
-import { Ls } from "./tools/ls";
-import { Write } from "./tools/write";
-import { MultiEdit } from "./tools/multiEdit";
-import { WebFetch } from "./tools/webFetch";
-import { WebSearch } from "./tools/webSearch";
-
-const getSystemPrompt = (
-  workingDirectory: string
-) => `You are an AI assistant that breaks down user requests into isolated development todos. You are working in: ${workingDirectory}
-
-Your task is to evaluate the current state and create a list of isolated, scoped todos that can be executed step by step, building on each other.
-
-Guidelines for creating todos:
-- Each todo should be a complete, self-contained unit of work
-- Todos should build on each other sequentially 
-- Make todos specific and actionable with clear deliverables
-- Break complex requests into logical, isolated development steps
-- Each todo should have a single clear purpose and outcome
-- Consider what has been completed and what still needs to be done
-- NEVER create testing, verification, or validation todos - each todo must handle its own testing internally
-- AVOID todos like "run tests", "verify changes", "check functionality" - these are not separate tasks
-
-Always use the WriteTodos tool to provide the updated list of pending todos needed to complete the user's request.`;
+import { execSync } from "child_process";
+import {
+  Todo,
+  PromptMessage,
+  TodosMessage,
+  Message,
+  TextMessage,
+  ReasoningMessage,
+  CompletedMessage,
+} from "./types.js";
+import { SessionEnvironment } from "./Environment.js";
+import { streamPrompt as streamPromptAnthropic } from "./prompt-anthropic.js";
+import { streamPrompt as streamPromptOpenAI } from "./prompt-openai.js";
+import { streamPrompt as streamPromptTogether } from "./prompt-together.js";
+import { ModelPromptFunction } from "./index.js";
+import { write_todos } from "./tools/write_todos.js";
+import { bash } from "./tools/bash.js";
+import { str_replace_based_edit_tool } from "./tools/str_replace_based_edit_tool.js";
+import { web_search } from "./tools/web_search.js";
+import { web_fetch } from "./tools/web_fetch.js";
 
 export class Session {
   static async *create(
     userPrompt: string,
     env: SessionEnvironment,
-    initialTodos?: Todo[]
+    models: ModelPromptFunction,
+    initialTodos?: Todo[],
+    repos?: Array<{
+      isGitRepo: boolean;
+      folderName: string;
+      remoteUrl: string;
+      org?: string;
+      repo?: string;
+      fullName?: string;
+      branchName?: string;
+    }>
   ) {
-    const session = new Session(userPrompt, env, initialTodos);
+    const session = new Session(
+      userPrompt,
+      env,
+      models,
+      initialTodos,
+      repos
+    );
 
     return yield* session.exec();
   }
@@ -47,14 +51,38 @@ export class Session {
   public env: SessionEnvironment;
   public inputTokens: number;
   public outputTokens: number;
+  public totalCostCents: number;
   public stepCount: number;
   public userPrompt: string;
   public readonly startTime: Date;
+  public models: ModelPromptFunction;
+  public reasoningEffort: "high" | "medium" | "low";
+  public lastEvaluateMessage: string | null;
+  public projectAnalysis: string | null;
+  public repos: Array<{
+    isGitRepo: boolean;
+    folderName: string;
+    remoteUrl: string;
+    org?: string;
+    repo?: string;
+    fullName?: string;
+    branchName?: string;
+  }>;
 
   constructor(
     userPrompt: string,
     env: SessionEnvironment,
-    initialTodos?: Todo[]
+    models: ModelPromptFunction,
+    initialTodos?: Todo[],
+    repos?: Array<{
+      isGitRepo: boolean;
+      folderName: string;
+      remoteUrl: string;
+      org?: string;
+      repo?: string;
+      fullName?: string;
+      branchName?: string;
+    }>
   ) {
     this.sessionId = uuidv4();
     this.userPrompt = userPrompt;
@@ -62,12 +90,25 @@ export class Session {
     this.env = env;
     this.inputTokens = 0;
     this.outputTokens = 0;
+    this.totalCostCents = 0;
     this.stepCount = 0;
     this.startTime = new Date();
+    this.models = models;
+    this.reasoningEffort = "medium"; // default value
+    this.lastEvaluateMessage = null;
+    this.projectAnalysis = null;
+    this.repos = repos || [];
   }
 
-  step(): void {
+
+  step(inputTokens: number, outputTokens: number, costCents: number): void {
     this.stepCount++;
+
+    // Update token counts
+    this.inputTokens += inputTokens;
+    this.outputTokens += outputTokens;
+    this.totalCostCents += costCents;
+
     if (this.env.maxSteps && this.stepCount > this.env.maxSteps) {
       throw new Error(
         `Maximum steps exceeded: ${this.stepCount}/${this.env.maxSteps}`
@@ -75,23 +116,122 @@ export class Session {
     }
   }
 
-  increaseTokens(inputTokens: number, outputTokens: number): void {
-    this.inputTokens += inputTokens;
-    this.outputTokens += outputTokens;
-  }
-
   getMaxSteps(): number | undefined {
     return this.env.maxSteps;
   }
 
-  async *exec(): AsyncGenerator<Message> {
-    yield* this.evaluateTodos();
-    yield* this.delegateTodos();
+  private generateTodoContext(todos: Todo[]): string {
+    if (todos.length === 0) {
+      return "No todos available";
+    }
 
-    const finalText = yield* this.summarizeTodos();
+    return todos
+      .map((todo, index) => {
+        let statusIcon = "";
+        switch (todo.status) {
+          case "completed":
+            statusIcon = "✅";
+            break;
+          case "in_progress":
+            statusIcon = "🔄";
+            break;
+          case "pending":
+            statusIcon = "⏳";
+            break;
+        }
+
+        let line = `${index + 1}. ${statusIcon} ${todo.description}`;
+        if (todo.summary) {
+          line += ` (${todo.summary})`;
+        }
+
+        return line;
+      })
+      .join("\n");
+  }
+
+  private getStreamPromptForProvider(
+    provider: "anthropic" | "openai" | "together"
+  ) {
+    switch (provider) {
+      case "anthropic":
+        return streamPromptAnthropic;
+      case "openai":
+        return streamPromptOpenAI;
+      case "together":
+        return streamPromptTogether;
+      default:
+        throw new Error(`Unknown provider: ${provider}`);
+    }
+  }
+
+  async *exec(): AsyncGenerator<Message> {
+    // Evaluate reasoning effort first
+    this.reasoningEffort = await this.evaluatePrompt(this.userPrompt);
+
+    // Always evaluate project after determining complexity
+    this.projectAnalysis = yield* this.evaluateProject(this.userPrompt);
+
+    // For low complexity, create a simple todo directly from user prompt with project analysis
+    if (this.reasoningEffort === "low") {
+      const todoDescription = this.projectAnalysis
+        ? `${this.userPrompt}\n\nProject Analysis Context:\n${this.projectAnalysis}`
+        : this.userPrompt;
+
+      this.todos = [
+        {
+          description: todoDescription,
+          context: "",
+          status: "pending" as const,
+          reasoningEffort: "low",
+          paths: [],
+        },
+      ];
+    } else {
+      // For medium/high complexity, use the full evaluation process
+      yield* this.evaluateTodos();
+    }
+
+    while (this.todos.some((todo) => todo.status === "pending")) {
+      // Find the first pending todo
+      const pendingTodo = this.todos.find((todo) => todo.status === "pending");
+      if (!pendingTodo) break;
+
+      // Mark todo as in_progress
+      pendingTodo.status = "in_progress";
+
+      if (this.todos.length > 1) {
+        yield {
+          type: "todos" as const,
+          todos: structuredClone(this.todos),
+          reasoningEffort: this.reasoningEffort,
+        };
+      }
+
+      // Execute the todo as a prompt in the child session
+      const text = yield* this.executeTodo(pendingTodo);
+
+      // Mark todo as completed
+      pendingTodo.status = "completed";
+      pendingTodo.summary = text;
+
+      if (this.todos.length > 1) {
+        yield {
+          type: "todos" as const,
+          todos: structuredClone(this.todos),
+          reasoningEffort: this.reasoningEffort,
+        };
+      }
+    }
+
+    // Only summarize if we have multiple todos
+    // For single todos, the final output has already been yielded during execution
+    if (this.todos.length > 1) {
+      yield* this.summarizeTodos();
+    }
 
     const durationMs = Date.now() - this.startTime.getTime();
-    const completedPart: Message = {
+    const completedPart: CompletedMessage = {
       type: "completed",
       inputTokens: this.inputTokens,
       outputTokens: this.outputTokens,
@@ -99,13 +239,13 @@ export class Session {
       durationMs,
       todos: this.todos,
       sessionId: this.sessionId,
+      totalCostDollars:
+        this.totalCostCents > 0 ? this.totalCostCents / 100 : undefined,
     };
     yield completedPart;
-
-    return finalText;
   }
 
-  async *evaluateTodos(): AsyncGenerator<Message> {
+  async *evaluateTodos(): AsyncGenerator<PromptMessage | TodosMessage> {
     const completedTodos = this.todos.filter(
       (todo) => todo.status === "completed"
     );
@@ -119,182 +259,273 @@ export class Session {
               summary: todo.summary,
             }))
           )}`
-        : "";
+        : "Completed todos with summaries:\nNo completed todos";
 
     const pendingTodosContext =
       pendingTodos.length > 0
         ? `Current pending todos:\n${JSON.stringify(pendingTodos)}`
-        : "";
+        : "Current pending todos:\nNo pending todos";
 
-    const context = [completedTodosContext, pendingTodosContext]
-      .filter(Boolean)
-      .join("\n\n");
+    const context = [completedTodosContext, pendingTodosContext].join("\n\n");
 
-    const prompt = `${this.userPrompt}${context ? `\n\n${context}` : ""}
+    // Use just the user prompt for reasoning effort evaluation
+    const basePrompt = this.userPrompt;
 
-Please evaluate the current pending todos based on what has been completed (including their summaries) and provide an updated list of todos needed to complete the request.
-
-IMPORTANT: Do not create testing todos. Each todo will handle its own verification internally.`;
-
-    const stream = streamPrompt({
-      session: this,
-      system: getSystemPrompt(this.env.workingDirectory),
-      prompt,
-      tools: {
-        WriteTodos: WriteTodos as any,
-      },
-      toolChoice: "required",
-      usePlanningModel: true,
+    const modelConfig = await this.models.evaluateTodos({
+      workspacePath: this.env.workingDirectory,
+      todos: this.todos,
+      prompt: basePrompt,
+      todosContext: context, // Pass context separately
+      hasCompletedTodos: completedTodos.length > 0,
+      hasPendingTodos: pendingTodos.length > 0,
+      projectAnalysis: this.projectAnalysis || undefined,
     });
 
+    const systemPrompt = modelConfig.systemPrompt;
+    const prompt = modelConfig.prompt;
+    const streamPromptFn = this.getStreamPromptForProvider(
+      modelConfig.provider
+    );
+
+    const stream = streamPromptFn({
+      session: this,
+      system: systemPrompt,
+      prompt,
+      tools: {
+        write_todos: write_todos(),
+      },
+      planningMode: true,
+      reasoningEffort: this.reasoningEffort,
+      verbosity: "low",
+      returnOnToolResult: "write_todos",
+      apiKey: modelConfig.apiKey,
+    });
+
+    let todosWritten: Array<{
+      description: string;
+      reasoningEffort: "high" | "medium" | "low";
+    }> = [];
+    let lastMessage: string | null = null;
+
     for await (const part of stream) {
-      if (part.type === "todos") {
-        this.todos = [
-          ...completedTodos,
-          ...part.todos.map((todo: Todo) => ({
-            ...todo,
-            status: "pending" as const,
-          })),
-        ];
+      if (part.type === "tool-call" && part.toolName === "write_todos") {
+        todosWritten = part.args.todos;
+        continue;
+      }
+
+      if (part.type === "tool-result" && part.toolName === "write_todos") {
+        // Create todos with programmatically generated context
+        const newTodos = todosWritten.map((todo) => ({
+          ...todo,
+          status: "pending" as const,
+          context: "", // Will be filled programmatically below
+        }));
+
+        this.todos = [...completedTodos, ...newTodos];
+
+        // Generate context for each todo based on current state
+        this.todos.forEach((todo) => {
+          if (todo.status === "pending") {
+            todo.context = this.generateTodoContext(this.todos);
+          }
+        });
+
         yield {
-          type: "todos" as const,
+          type: "todos",
           todos: structuredClone(this.todos),
-          sessionId: this.sessionId,
+          reasoningEffort: this.reasoningEffort,
         };
+        // Store the last message for context
+        this.lastEvaluateMessage = lastMessage;
+        // Stream will return after this due to returnOnToolResult: true
+        break;
       } else {
+        // Capture the last text or reasoning message
+        if (part.type === "text") {
+          lastMessage = part.text;
+        } else if (part.type === "reasoning") {
+          lastMessage = part.text;
+        }
         yield part;
       }
     }
   }
 
-  async *executeTodo(todo: Todo): AsyncGenerator<Message, string> {
-    const remainingPendingTodos = this.todos.filter(
-      (t) => t.status === "pending"
+  async *executeTodo(todo: Todo) {
+    // Initialize or use existing paths set for this todo
+    if (!todo.paths) {
+      todo.paths = [];
+    }
+    const pathsSet = new Set(todo.paths);
+
+    const modelConfig = await this.models.executeTodo({
+      workspacePath: this.env.workingDirectory,
+      todo,
+      todos: this.todos,
+      projectAnalysis: this.projectAnalysis || undefined,
+      repos: this.repos,
+    });
+
+    const systemPrompt = modelConfig.systemPrompt;
+    const prompt = modelConfig.prompt;
+    const streamPromptFn = this.getStreamPromptForProvider(
+      modelConfig.provider
     );
 
-    const remainingTodosContext =
-      remainingPendingTodos.length > 0
-        ? `\n\nRemaining pending todos (do NOT implement these - they will be handled separately):\n${remainingPendingTodos
-            .map((t) => `- ${t.description}`)
-            .join("\n")}`
-        : "";
+    // Create bash tool instance that we can dispose of later
+    const bashTool = bash(this.env.workingDirectory);
 
-    const systemPrompt = `You are an AI assistant that executes todos. You have been given a specific todo to accomplish.
+    try {
+      const result = yield* streamPromptFn({
+        session: this,
+        system: systemPrompt,
+        prompt,
+        tools: {
+          bash: bashTool,
+          str_replace_based_edit_tool: str_replace_based_edit_tool(
+            this.env.workingDirectory
+          ),
+          web_search: web_search(),
+          web_fetch: web_fetch(),
+        },
+        maxSteps: this.getMaxSteps(),
+        reasoningEffort: todo.reasoningEffort,
+        verbosity: "low",
+        pathsSet,
+        apiKey: modelConfig.apiKey,
+      }) as AsyncGenerator<PromptMessage, string>;
 
-Working directory: ${this.env.workingDirectory}
+      // Update the todo's paths with any new paths that were added
+      todo.paths = Array.from(pathsSet);
 
-CRITICAL: You must ONLY do what is described in the todo. Do not go beyond the scope of the todo description. Do not add extra features, improvements, or related work unless explicitly mentioned in the todo itself.${remainingTodosContext}
-
-IMPORTANT: When the todo is ambiguous, ask for clarification rather than making assumptions. Prefer conservative, minimal actions over comprehensive solutions. Focus strictly on the described task and nothing more.
-
-Before using any tools, determine if this todo can be answered from your existing knowledge:
-- For questions about concepts, explanations, best practices, or general knowledge: Answer directly without using tools
-- For questions requiring current/specific information about the codebase: Use Read, Grep, or Glob to investigate
-- For tasks requiring modifications: Use Edit, Write, or MultiEdit
-- For tasks requiring external information: Use WebSearch or WebFetch
-- For tasks requiring command execution: Use Bash
-
-Only use tools when you actually need to:
-- Read or search existing files in the codebase
-- Modify code or create new files
-- Run commands, tests, or analysis
-- Gather external or current information
-
-If you can confidently answer the question from your knowledge without needing to access files or run commands, do so directly.
-
-When using the bash tool, NEVER run long-running or persistent processes such as:
-- Development servers (npm run dev, yarn start, etc.)
-- Build watchers (npm run watch) 
-- Deploy scripts
-- Any process that requires user interaction
-
-TESTING: After making significant code changes (new functionality, bug fixes, refactoring), consider running relevant tests or build commands to verify the changes work correctly. Use the Bash tool for testing when appropriate, but avoid excessive testing for trivial changes like text updates, comments, or documentation.
-
-IMPORTANT: When you complete your task, always provide a clear summary of what was accomplished, including:
-- A brief description of the actions taken
-- References to any files that were modified, created, or analyzed using the format "file_path:line_number" when specific lines are relevant
-- Any important findings or results from your work
-This helps users understand exactly what was done and easily navigate to relevant code locations.
-`;
-
-    return yield* streamPrompt({
-      session: this,
-      system: systemPrompt,
-      prompt: todo.description,
-      tools: {
-        Read,
-        Bash,
-        Edit,
-        Glob,
-        Grep,
-        Ls,
-        Write,
-        MultiEdit,
-        WebFetch,
-        WebSearch,
-      },
-      toolChoice: "auto",
-      maxSteps: this.getMaxSteps(),
-    });
-  }
-
-  async *delegateTodos(): AsyncGenerator<Message> {
-    while (this.todos.some((todo) => todo.status === "pending")) {
-      // Find the first pending todo
-      const pendingTodo = this.todos.find((todo) => todo.status === "pending");
-      if (!pendingTodo) break;
-
-      // Mark todo as in_progress
-      pendingTodo.status = "in_progress";
-      yield {
-        type: "todos" as const,
-        todos: structuredClone(this.todos),
-        sessionId: this.sessionId,
-      };
-
-      // Execute the todo as a prompt in the child session
-      const text = yield* this.executeTodo(pendingTodo);
-
-      // Mark todo as completed
-      pendingTodo.status = "completed";
-      pendingTodo.summary = text;
-      yield {
-        type: "todos" as const,
-        todos: structuredClone(this.todos),
-        sessionId: this.sessionId,
-      };
-
-      // Only re-evaluate todos if there are still pending ones
-      if (this.todos.some((todo) => todo.status === "pending")) {
-        yield* this.evaluateTodos();
-      }
+      return result;
+    } finally {
+      // Always dispose of the bash tool when done
+      bashTool.dispose();
     }
   }
 
-  async *summarizeTodos(): AsyncGenerator<Message, string> {
-    const completedTodos = this.todos.filter(
-      (todo) => todo.status === "completed"
+  async *summarizeTodos() {
+    const modelConfig = await this.models.summarizeTodos({
+      workspacePath: this.env.workingDirectory,
+      todos: this.todos,
+    });
+
+    const systemPrompt = modelConfig.systemPrompt;
+    const prompt = modelConfig.prompt;
+    const streamPromptFn = this.getStreamPromptForProvider(
+      modelConfig.provider
     );
 
-    const systemPrompt = `You are an AI assistant answering the following user request: "${this.userPrompt}"
+    return yield* streamPromptFn({
+      session: this,
+      system: systemPrompt,
+      prompt,
+      tools: {
+        write_todos: write_todos(),
+      },
+      maxSteps: this.getMaxSteps(),
+      verbosity: "medium",
+      apiKey: modelConfig.apiKey,
+    }) as AsyncGenerator<TextMessage | ReasoningMessage, string>;
+  }
 
-Working directory: ${this.env.workingDirectory}
+  async evaluatePrompt(prompt: string): Promise<"low" | "medium" | "high"> {
+    const systemPrompt = `You are evaluating the reasoning effort required to define todos for a given prompt. 
 
-Your purpose is to provide a final answer to this request. You have been given the results of completed todos that were executed to fulfill the request. Use these todo results as context to provide a comprehensive answer. 
+Analyze the prompt and determine the complexity level based on:
+- Low: Simple, single-step tasks (e.g., "fix this typo", "add a comment")
+- Medium: Multi-step tasks requiring some planning (e.g., "add a new feature", "refactor a component") 
+- High: Complex tasks requiring extensive planning and coordination (e.g., "redesign the architecture", "implement a complex system")
 
-IMPORTANT: Describe what HAS BEEN DONE, not what WILL BE DONE. Use past tense when describing the actions and results. Focus on directly addressing what the user asked for based on the completed work, not on describing the todos themselves.`;
+Respond with only one word: "low", "medium", or "high". Do not include any additional text or explanation.`;
 
-    const prompt = completedTodos
-      ? `Completed todos for context:\n${JSON.stringify(completedTodos)}`
-      : "No todos were completed.";
+    const modelConfig = await this.models.evaluateTodos({
+      workspacePath: this.env.workingDirectory,
+      todos: [],
+      prompt,
+    });
 
-    return yield* streamPrompt({
+    const streamPromptFn = this.getStreamPromptForProvider(
+      modelConfig.provider
+    );
+
+    let result = "";
+    const stream = streamPromptFn({
       session: this,
       system: systemPrompt,
       prompt,
       tools: {},
-      toolChoice: "auto",
-      maxSteps: this.getMaxSteps(),
+      verbosity: "low",
+      apiKey: modelConfig.apiKey,
     });
+
+    for await (const part of stream) {
+      if (part.type === "text") {
+        result += part.text;
+      }
+    }
+
+    const trimmedResult = result.trim().toLowerCase();
+
+    if (trimmedResult.includes("low")) {
+      return "low";
+    }
+
+    if (trimmedResult.includes("high")) {
+      return "high";
+    }
+
+    return "medium";
+  }
+
+  async *evaluateProject(
+    prompt: string
+  ): AsyncGenerator<PromptMessage, string> {
+    const modelConfig = await this.models.evaluateProject({
+      workspacePath: this.env.workingDirectory,
+      prompt,
+      repos: this.repos,
+    });
+
+    const systemPrompt = modelConfig.systemPrompt;
+    const promptText = modelConfig.prompt;
+    const streamPromptFn = this.getStreamPromptForProvider(
+      modelConfig.provider
+    );
+
+    const stream = streamPromptFn({
+      session: this,
+      system: systemPrompt,
+      prompt: promptText,
+      tools: {
+        bash: bash(this.env.workingDirectory),
+      },
+      verbosity: "low",
+      apiKey: modelConfig.apiKey,
+    });
+
+    let result = "";
+    for await (const part of stream) {
+      if (part.type === "text") {
+        result += part.text;
+      }
+      // Exclude reasoning from the result to prevent leakage of analysis suggestions
+      // Only capture the main text output which should contain pure project analysis
+
+      // Only yield messages that are part of PromptMessage type
+      if (
+        part.type === "text" ||
+        part.type === "reasoning" ||
+        part.type === "error" ||
+        (part.type === "tool-call" && part.toolName === "bash") ||
+        (part.type === "tool-result" && part.toolName === "bash") ||
+        (part.type === "tool-error" && part.toolName === "bash")
+      ) {
+        yield part as PromptMessage;
+      }
+    }
+
+    return result;
   }
 }

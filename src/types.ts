@@ -14,10 +14,6 @@ export type ReasoningMessage = {
   type: "reasoning";
   text: string;
 } & SessionInfo;
-export type TodosMessage = {
-  type: "todos";
-  todos: Todo[];
-} & SessionInfo;
 export type CompletedMessage = {
   type: "completed";
   inputTokens: number;
@@ -25,87 +21,49 @@ export type CompletedMessage = {
   stepCount: number;
   durationMs: number;
   todos?: Todo[];
+  totalCostDollars?: number;
 } & SessionInfo;
 // Tool call message types
+export type WriteTodosCallMessage = {
+  type: "tool-call";
+  toolCallId: string;
+  toolName: "write_todos";
+  args: { todos: Array<{ description: string; reasoningEffort: "high" | "medium" | "low" }> };
+};
+
 export type BashToolCallMessage = {
   type: "tool-call";
   toolCallId: string;
-  toolName: "Bash";
-  args: { bashCommand: string };
+  toolName: "bash";
+  args: { command?: string; restart?: boolean };
 } & SessionInfo;
 
-export type ReadToolCallMessage = {
+export type StrReplaceBasedEditToolCallMessage = {
   type: "tool-call";
   toolCallId: string;
-  toolName: "Read";
-  args: { catArguments: string };
-} & SessionInfo;
-
-export type EditToolCallMessage = {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: "Edit";
+  toolName: "str_replace_based_edit_tool";
   args: {
-    file: string;
-    find: string;
-    replace: string;
-    replaceAll: boolean;
-  };
-} & SessionInfo;
-
-export type WriteToolCallMessage = {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: "Write";
-  args: { filePath: string; content: string };
-} & SessionInfo;
-
-export type LsToolCallMessage = {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: "Ls";
-  args: { lsArguments: string };
-} & SessionInfo;
-
-export type GlobToolCallMessage = {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: "Glob";
-  args: { globArguments: string };
-} & SessionInfo;
-
-export type GrepToolCallMessage = {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: "Grep";
-  args: { grepArguments: string };
-} & SessionInfo;
-
-export type MultiEditToolCallMessage = {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: "MultiEdit";
-  args: {
-    file: string;
-    edits: Array<{
-      find: string;
-      replace: string;
-      replaceAll: boolean;
-    }>;
+    command: "view" | "create" | "str_replace" | "insert";
+    path: string;
+    file_text?: string;
+    insert_line?: number;
+    new_str?: string;
+    old_str?: string;
+    view_range?: number[];
   };
 } & SessionInfo;
 
 export type WebFetchToolCallMessage = {
   type: "tool-call";
   toolCallId: string;
-  toolName: "WebFetch";
+  toolName: "web_fetch";
   args: { url: string; maxBytes?: number; timeoutMs?: number };
 } & SessionInfo;
 
 export type WebSearchToolCallMessage = {
   type: "tool-call";
   toolCallId: string;
-  toolName: "WebSearch";
+  toolName: "web_search";
   args: {
     query: string;
     topK?: number;
@@ -116,76 +74,42 @@ export type WebSearchToolCallMessage = {
 
 export type ToolCallMessage =
   | BashToolCallMessage
-  | ReadToolCallMessage
-  | EditToolCallMessage
-  | WriteToolCallMessage
-  | LsToolCallMessage
-  | GlobToolCallMessage
-  | GrepToolCallMessage
-  | MultiEditToolCallMessage
+  | StrReplaceBasedEditToolCallMessage
   | WebFetchToolCallMessage
   | WebSearchToolCallMessage;
+
 // Tool result message types
+export type WriteTodosResultMessage = {
+  type: "tool-result";
+  toolCallId: string;
+  toolName: "write_todos";
+  result: { todos: Todo[] };
+};
 export type BashToolResultMessage = {
   type: "tool-result";
   toolCallId: string;
-  toolName: "Bash";
-  result: { stdout: string; stderr?: string };
+  toolName: "bash";
+  result: { 
+    stdout: string; 
+    stderr: string; 
+    exitCode: number; 
+    pwd?: string; 
+    workingDirectory?: string;
+    note?: string;
+  };
 } & SessionInfo;
 
-export type ReadToolResultMessage = {
+export type StrReplaceBasedEditToolResultMessage = {
   type: "tool-result";
   toolCallId: string;
-  toolName: "Read";
-  result: { output: string; stderr?: string };
-} & SessionInfo;
-
-export type EditToolResultMessage = {
-  type: "tool-result";
-  toolCallId: string;
-  toolName: "Edit";
-  result: { ok: boolean };
-} & SessionInfo;
-
-export type WriteToolResultMessage = {
-  type: "tool-result";
-  toolCallId: string;
-  toolName: "Write";
-  result: { output: string };
-} & SessionInfo;
-
-export type LsToolResultMessage = {
-  type: "tool-result";
-  toolCallId: string;
-  toolName: "Ls";
-  result: { output: string; stderr?: string };
-} & SessionInfo;
-
-export type GlobToolResultMessage = {
-  type: "tool-result";
-  toolCallId: string;
-  toolName: "Glob";
-  result: { output: string; stderr?: string };
-} & SessionInfo;
-
-export type GrepToolResultMessage = {
-  type: "tool-result";
-  toolCallId: string;
-  toolName: "Grep";
-  result: { output: string; stderr?: string };
-} & SessionInfo;
-
-export type MultiEditToolResultMessage = {
-  type: "tool-result";
-  toolCallId: string;
-  toolName: "MultiEdit";
-  result: { ok: boolean };
+  toolName: "str_replace_based_edit_tool";
+  result: string;
 } & SessionInfo;
 
 export type WebFetchToolResultMessage = {
   type: "tool-result";
   toolCallId: string;
-  toolName: "WebFetch";
+  toolName: "web_fetch";
   result: {
     url: string;
     status: number;
@@ -200,7 +124,7 @@ export type WebFetchToolResultMessage = {
 export type WebSearchToolResultMessage = {
   type: "tool-result";
   toolCallId: string;
-  toolName: "WebSearch";
+  toolName: "web_search";
   result: Array<{
     title: string;
     url: string;
@@ -211,125 +135,62 @@ export type WebSearchToolResultMessage = {
 
 export type ToolResultMessage =
   | BashToolResultMessage
-  | ReadToolResultMessage
-  | EditToolResultMessage
-  | WriteToolResultMessage
-  | LsToolResultMessage
-  | GlobToolResultMessage
-  | GrepToolResultMessage
-  | MultiEditToolResultMessage
+  | StrReplaceBasedEditToolResultMessage
   | WebFetchToolResultMessage
   | WebSearchToolResultMessage;
+
 // Tool error message types
 export type BashToolErrorMessage = {
   type: "tool-error";
   toolCallId: string;
-  toolName: "Bash";
+  toolName: "bash";
   error: string;
 } & SessionInfo;
 
-export type ReadToolErrorMessage = {
+export type StrReplaceBasedEditToolErrorMessage = {
   type: "tool-error";
   toolCallId: string;
-  toolName: "Read";
-  error: string;
-} & SessionInfo;
-
-export type EditToolErrorMessage = {
-  type: "tool-error";
-  toolCallId: string;
-  toolName: "Edit";
-  error: string;
-} & SessionInfo;
-
-export type WriteToolErrorMessage = {
-  type: "tool-error";
-  toolCallId: string;
-  toolName: "Write";
-  error: string;
-} & SessionInfo;
-
-export type LsToolErrorMessage = {
-  type: "tool-error";
-  toolCallId: string;
-  toolName: "Ls";
-  error: string;
-} & SessionInfo;
-
-export type GlobToolErrorMessage = {
-  type: "tool-error";
-  toolCallId: string;
-  toolName: "Glob";
-  error: string;
-} & SessionInfo;
-
-export type GrepToolErrorMessage = {
-  type: "tool-error";
-  toolCallId: string;
-  toolName: "Grep";
-  error: string;
-} & SessionInfo;
-
-export type MultiEditToolErrorMessage = {
-  type: "tool-error";
-  toolCallId: string;
-  toolName: "MultiEdit";
+  toolName: "str_replace_based_edit_tool";
   error: string;
 } & SessionInfo;
 
 export type WebFetchToolErrorMessage = {
   type: "tool-error";
   toolCallId: string;
-  toolName: "WebFetch";
+  toolName: "web_fetch";
   error: string;
 } & SessionInfo;
 
 export type WebSearchToolErrorMessage = {
   type: "tool-error";
   toolCallId: string;
-  toolName: "WebSearch";
+  toolName: "web_search";
   error: string;
 } & SessionInfo;
 
 export type ToolErrorMessage =
   | BashToolErrorMessage
-  | ReadToolErrorMessage
-  | EditToolErrorMessage
-  | WriteToolErrorMessage
-  | LsToolErrorMessage
-  | GlobToolErrorMessage
-  | GrepToolErrorMessage
-  | MultiEditToolErrorMessage
+  | StrReplaceBasedEditToolErrorMessage
   | WebFetchToolErrorMessage
   | WebSearchToolErrorMessage;
 export type ErrorMessage = { type: "error"; error: string } & SessionInfo;
 
+export type TodosMessage = {
+  type: "todos";
+  todos: Todo[];
+  reasoningEffort: "high" | "medium" | "low";
+};
+
+export type Message = PromptMessage | TodosMessage | CompletedMessage;
+
 // Union of all message types
-export type Message =
+export type PromptMessage =
   | TextMessage
   | ReasoningMessage
-  | TodosMessage
-  | CompletedMessage
   | ToolCallMessage
   | ToolResultMessage
   | ToolErrorMessage
   | ErrorMessage;
-
-// Session interface
-export interface Session {
-  sessionId: string;
-  env: {
-    model: any; // AI model instance
-    planningModel: any; // AI model instance for planning/evaluation
-  };
-  todos: Todo[];
-  stepCount: number;
-  inputTokens: number;
-  outputTokens: number;
-  startTime: Date;
-  step(): void;
-  increaseTokens(inputTokens: number, outputTokens: number): void;
-}
 
 // Todo interface (kept from original)
 export interface Todo {
@@ -337,4 +198,6 @@ export interface Todo {
   context: string;
   status: "pending" | "in_progress" | "completed";
   summary?: string;
+  reasoningEffort: "high" | "medium" | "low";
+  paths?: string[];
 }

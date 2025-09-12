@@ -1,0 +1,16 @@
+{
+  "setupTasks": [
+    "echo \"node_modules/\" > .gitignore ",
+    "cd .codesandbox && bun install"
+  ],
+  "tasks": {
+    "agent": {
+      "name": "agent-server",
+      "command": "rm -rf .git && rm -f README.md && bun .codesandbox/agent.js",
+      "preview": {
+        "port": 4999
+      },
+      "runAtStart": true
+    }
+  }
+}

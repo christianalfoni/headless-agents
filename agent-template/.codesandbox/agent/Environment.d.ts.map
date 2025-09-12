@@ -1,0 +1,1 @@
+{"version":3,"file":"Environment.d.ts","sourceRoot":"","sources":["../../../src/Environment.ts"],"names":[],"mappings":"AAAA,qBAAa,kBAAkB;IACtB,gBAAgB,EAAE,MAAM,CAAC;IACzB,SAAS,CAAC,EAAE,OAAO,CAAC;IACpB,QAAQ,CAAC,EAAE,MAAM,CAAC;gBAGvB,gBAAgB,EAAE,MAAM,EACxB,SAAS,CAAC,EAAE,OAAO,EACnB,QAAQ,CAAC,EAAE,MAAM;IAOnB,OAAO,IAAI,IAAI;CAGhB"}

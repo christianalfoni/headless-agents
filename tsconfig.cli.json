@@ -7,14 +7,18 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "outDir": "./agent-template/.codesandbox/agent",
-    "rootDir": "./src",
+    "outDir": "./dist",
+    "rootDir": "./cli",
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "declaration": true,
     "declarationMap": true,
-    "types": ["node"]
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "noImplicitAny": false,
+    "allowImportingTsExtensions": false,
+    "noEmit": false
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["cli/**/*"],
+  "exclude": ["node_modules", "dist", "agent-template"]
 }

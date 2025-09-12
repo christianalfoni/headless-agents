@@ -1,0 +1,1 @@
+{"version":3,"file":"write_todos.d.ts","sourceRoot":"","sources":["../../../../src/tools/write_todos.ts"],"names":[],"mappings":"AAGA,eAAO,MAAM,WAAW;;;;;;;;;;;;;;;;;;;;;;;;;;;;;qBA4BC;QACrB,KAAK,EAAE;YACL,WAAW,EAAE,MAAM,CAAC;YACpB,eAAe,EAAE,MAAM,GAAG,QAAQ,GAAG,KAAK,CAAC;SAC5C,EAAE,CAAC;KACL;CAGD,CAAC"}
