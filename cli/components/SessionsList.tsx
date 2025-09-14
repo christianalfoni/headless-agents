@@ -4,10 +4,10 @@ import open from "open";
 import path from "path";
 import { execSync } from "child_process";
 
-import { IPromptSession } from '../types.js';
+import { IPromptTask } from '../types.js';
 
-interface SessionsListProps {
-  sessions: IPromptSession[];
+interface TasksListProps {
+  tasks: IPromptTask[];
   selectedIndex: number;
   searchPath: string;
   onSelect: (index: number) => void;
@@ -36,30 +36,30 @@ const getGitStatus = (repoPath: string): GitStatus => {
   }
 };
 
-export const SessionsList: React.FC<SessionsListProps> = ({ 
-  sessions, 
-  selectedIndex, 
+export const SessionsList: React.FC<TasksListProps> = ({
+  tasks,
+  selectedIndex,
   searchPath,
-  onSelect, 
-  onNavigate, 
-  onDelete, 
+  onSelect,
+  onNavigate,
+  onDelete,
   focusPrevious,
   isFocused
 }) => {
   const [gitStatuses, setGitStatuses] = useState<RepoGitStatus>({});
 
-  // Poll git status for all repos in sessions
+  // Poll git status for all repos in tasks
   useEffect(() => {
     const updateGitStatuses = () => {
       const newStatuses: RepoGitStatus = {};
-      
-      sessions.forEach(session => {
-        session.repos.forEach(repo => {
+
+      tasks.forEach(task => {
+        task.repos.forEach(repo => {
           const repoPath = path.join(searchPath, repo.repoInfo.folderName);
           newStatuses[repoPath] = getGitStatus(repoPath);
         });
       });
-      
+
       setGitStatuses(newStatuses);
     };
 
@@ -70,7 +70,7 @@ export const SessionsList: React.FC<SessionsListProps> = ({
     const interval = setInterval(updateGitStatuses, 5000);
 
     return () => clearInterval(interval);
-  }, [sessions, searchPath]);
+  }, [tasks, searchPath]);
   useInput((inputText, key) => {
     // Only handle input when focused
     if (!isFocused) return;
@@ -84,19 +84,19 @@ export const SessionsList: React.FC<SessionsListProps> = ({
     } else if (key.downArrow) {
       onNavigate('down');
     } else if (key.return) {
-      if (selectedIndex >= 0 && selectedIndex < sessions.length) {
+      if (selectedIndex >= 0 && selectedIndex < tasks.length) {
         onSelect(selectedIndex);
       }
     } else if (key.backspace || key.delete) {
-      if (selectedIndex >= 0 && selectedIndex < sessions.length) {
+      if (selectedIndex >= 0 && selectedIndex < tasks.length) {
         onDelete(selectedIndex);
       }
     } else if ((key.shift && key.return) || inputText === 'o') {
-      if (selectedIndex >= 0 && selectedIndex < sessions.length) {
-        const session = sessions[selectedIndex];
-        if (session.repos && session.repos.length > 0) {
+      if (selectedIndex >= 0 && selectedIndex < tasks.length) {
+        const task = tasks[selectedIndex];
+        if (task.repos && task.repos.length > 0) {
           // Process each repository: checkout branch and open in VSCode
-          for (const repo of session.repos) {
+          for (const repo of task.repos) {
             const repoPath = path.join(searchPath, repo.repoInfo.folderName);
             
             try {
@@ -129,32 +129,32 @@ export const SessionsList: React.FC<SessionsListProps> = ({
     }
   });
   
-  if (sessions.length === 0) {
+  if (tasks.length === 0) {
     return (
       <Box paddingX={1} paddingY={1}>
-        <Text color="gray">No recent prompts</Text>
+        <Text color="gray">No recent tasks</Text>
       </Box>
     );
   }
   
-  // Show limited sessions when not focused
-  const sessionsToShow = isFocused ? sessions : sessions.slice(0, 5);
+  // Show limited tasks when not focused
+  const tasksToShow = isFocused ? tasks : tasks.slice(0, 5);
   
   return (
     <Box paddingX={1} paddingY={1} flexDirection="column">
-      {sessionsToShow.map((session, index) => {
-        const statusIcon = session.getStateIcon();
-        const createdAt = session.createdAt.toLocaleString();
+      {tasksToShow.map((task, index) => {
+        const statusIcon = task.getStateIcon();
+        const createdAt = task.createdAt.toLocaleString();
         const isSelected = isFocused && index === selectedIndex;
-        
-        const hasRepos = session.repos.length > 0;
+
+        const hasRepos = task.repos.length > 0;
         
         return (
-          <Box key={session.id} marginBottom={1} flexDirection="column">
+          <Box key={task.id} marginBottom={1} flexDirection="column">
             <Box paddingLeft={2} flexDirection="row" alignItems="flex-start">
               <Text color={isSelected ? "cyan" : "gray"}>● </Text>
               <Text color={isFocused ? "white" : "gray"}>
-                {statusIcon} {session.prompt}
+                {statusIcon} {task.prompt}
               </Text>
             </Box>
             <Box paddingLeft={2}>
@@ -164,7 +164,7 @@ export const SessionsList: React.FC<SessionsListProps> = ({
             </Box>
             {hasRepos && (
               <Box paddingLeft={2} flexDirection="row" flexWrap="wrap">
-                {session.repos.map((repo, idx) => {
+                {task.repos.map((repo, idx) => {
                   const repoPath = path.join(searchPath, repo.repoInfo.folderName);
                   const status = gitStatuses[repoPath] || 'unknown';
                   const statusColor = status === 'clean' ? 'green' : status === 'dirty' ? 'red' : 'gray';
@@ -179,14 +179,14 @@ export const SessionsList: React.FC<SessionsListProps> = ({
                         {statusSymbol}
                       </Text>
                       <Text color="yellow" dimColor={!isFocused}>
-                        ){idx < session.repos.length - 1 ? ', ' : ''}
+                        ){idx < task.repos.length - 1 ? ', ' : ''}
                       </Text>
                     </React.Fragment>
                   );
                 })}
               </Box>
             )}
-            {!hasRepos && session.state === "error" && (
+            {!hasRepos && task.state === "error" && (
               <Box paddingLeft={2}>
                 <Text color="red" dimColor={!isFocused}>
                   ❌ No repositories available

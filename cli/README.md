@@ -4,31 +4,13 @@ This example demonstrates how to use the headless coding agent via CodeSandbox, 
 
 ## Setup
 
-### 1. Get a CodeSandbox API Key
+### 1. Get a Together API Key
 
-1. Sign up at [CodeSandbox](https://codesandbox.io)
-2. Generate an API key at [https://codesandbox.io/t/api](https://codesandbox.io/t/api)
-3. Set the environment variable:
-   ```bash
-   export CSB_API_KEY="your_codesandbox_api_key"
-   ```
+1. Sign up at [Together.ai](https://together.ai)
+2. Generate an API key at [https://api.together.xyz/settings/api-keys](https://api.together.xyz/settings/api-keys)
+3. The CLI will prompt you to enter this key on first run (it will be stored securely)
 
-### 2. Get an AI Provider API Key
-
-Set the appropriate environment variable for your chosen provider:
-
-```bash
-# For Anthropic (default)
-export ANTHROPIC_API_KEY="your_anthropic_api_key"
-
-# For OpenAI
-export OPENAI_API_KEY="your_openai_api_key"
-
-# For Together.ai
-export TOGETHER_API_KEY="your_together_api_key"
-```
-
-### 3. Install Dependencies
+### 2. Install Dependencies
 
 ```bash
 npm install
@@ -42,11 +24,10 @@ Run the interactive chat interface:
 node index.js
 ```
 
-Or specify a different AI provider:
+You can also specify a different directory to search for git repositories:
 
 ```bash
-node index.js --provider openai
-node index.js --provider together
+node index.js /path/to/your/projects
 ```
 
 ## How it Works

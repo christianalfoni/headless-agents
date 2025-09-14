@@ -175,7 +175,7 @@ export async function prompt(config: {
       if (systemMessage && systemMessage.content[0]?.type === "text") {
         const systemText = systemMessage.content[0].text;
         // Only add reasoning effort if it hasn't been added already
-        if (!systemText.includes('<|reasoning|>')) {
+        if (!systemText.includes("<|reasoning|>")) {
           systemMessage.content[0].text += `\n<|reasoning|>${config.reasoningEffort.toUpperCase()}`;
         }
       }
@@ -185,12 +185,12 @@ export async function prompt(config: {
     if (config.tools && config.tools.length > 0) {
       // Check if tools have already been injected by looking for a developer role message with "# Tools"
       const hasToolsMessage = harmonyMessages.some(
-        (msg) => 
-          msg.role === "developer" && 
-          msg.content[0]?.type === "text" && 
+        (msg) =>
+          msg.role === "developer" &&
+          msg.content[0]?.type === "text" &&
           msg.content[0].text.startsWith("# Tools\n")
       );
-      
+
       if (!hasToolsMessage) {
         const toolsMessage: Message = {
           role: "developer",
@@ -223,23 +223,19 @@ export async function prompt(config: {
       `=== PROMPT SENT ===\n${promptText}\n=================\n\n`
     );
 
-    const response = await fetch(
-      // "https://api.together.xyz/v1/completions",
-      "https://api.fireworks.ai/inference/v1/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${config.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          // model: "openai/gpt-oss-120b",
-          model: "accounts/fireworks/models/gpt-oss-120b",
-          prompt: promptText,
-          max_tokens: 2048,
-        }),
-      }
-    );
+    const response = await fetch("https://api.together.xyz/v1/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "openai/gpt-oss-120b",
+        prompt: promptText,
+        max_tokens: 2048,
+        temperature: 0.2,
+      }),
+    });
 
     if (!response.ok) {
       const errorText = await response.text();

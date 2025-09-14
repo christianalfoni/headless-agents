@@ -343,8 +343,32 @@ export const CustomTextInput = React.forwardRef<CustomTextInputRef, CustomTextIn
         let lineOffset = 0;
 
         while (remainingLine.length > 0) {
-          const chunk = remainingLine.slice(0, availableWidth);
-          remainingLine = remainingLine.slice(availableWidth);
+          let chunk: string;
+          let nextRemainingLine: string;
+          let skippedSpace = false;
+
+          if (remainingLine.length <= availableWidth) {
+            // Remaining text fits in one line
+            chunk = remainingLine;
+            nextRemainingLine = '';
+          } else {
+            // Find the best place to break the line
+            const candidateChunk = remainingLine.slice(0, availableWidth);
+            const lastSpaceIndex = candidateChunk.lastIndexOf(' ');
+
+            if (lastSpaceIndex > 0) {
+              // Break at word boundary
+              chunk = candidateChunk.slice(0, lastSpaceIndex);
+              nextRemainingLine = remainingLine.slice(lastSpaceIndex + 1); // Skip the space
+              skippedSpace = true;
+            } else {
+              // No space found, break at character boundary (fallback for very long words)
+              chunk = candidateChunk;
+              nextRemainingLine = remainingLine.slice(availableWidth);
+            }
+          }
+
+          remainingLine = nextRemainingLine;
           
           // Check if cursor is in this chunk
           const chunkStart = lineOffset;
@@ -384,6 +408,10 @@ export const CustomTextInput = React.forwardRef<CustomTextInputRef, CustomTextIn
           );
 
           lineOffset += chunk.length;
+          // If we broke at a word boundary, account for the skipped space
+          if (skippedSpace) {
+            lineOffset += 1; // Add 1 for the skipped space
+          }
           wrapIndex++;
         }
       }

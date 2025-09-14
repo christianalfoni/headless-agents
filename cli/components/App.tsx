@@ -4,40 +4,40 @@ import { InputField } from './InputField.js';
 import { SessionsList } from './SessionsList.js';
 import { MessagesView } from './MessagesView.js';
 
-import { GitRepoInfo, IPromptSession } from '../types.js';
+import { GitRepoInfo, IPromptTask } from '../types.js';
 
 interface AppProps {
-  sessions: IPromptSession[];
+  tasks: IPromptTask[];
   gitRepos: GitRepoInfo[];
   searchPath: string;
   onPromptSubmit: (prompt: string) => void;
-  onSessionDelete: (sessionId: string) => void;
+  onTaskDelete: (taskId: string) => void;
 }
 
-export const App: React.FC<AppProps> = ({ 
-  sessions, 
-  gitRepos, 
+export const App: React.FC<AppProps> = ({
+  tasks,
+  gitRepos,
   searchPath,
-  onPromptSubmit, 
-  onSessionDelete 
+  onPromptSubmit,
+  onTaskDelete
 }) => {
   const [currentFocus, setCurrentFocus] = useState<'input' | 'list'>('input');
-  const [selectedSessionIndex, setSelectedSessionIndex] = useState(0);
-  const [viewingSession, setViewingSession] = useState<IPromptSession | null>(null);
+  const [selectedTaskIndex, setSelectedTaskIndex] = useState(0);
+  const [viewingTask, setViewingTask] = useState<IPromptTask | null>(null);
   const { exit } = useApp();
   
   useInput((inputText, key) => {
-    if (key.escape && !viewingSession) {
+    if (key.escape && !viewingTask) {
       exit();
     }
   });
   
   const handleFocusNext = useCallback(() => {
-    if (sessions.length > 0) {
+    if (tasks.length > 0) {
       setCurrentFocus('list');
-      setSelectedSessionIndex(0);
+      setSelectedTaskIndex(0);
     }
-  }, [sessions.length]);
+  }, [tasks.length]);
   
   const handlePromptSubmit = useCallback((prompt: string) => {
     onPromptSubmit(prompt);
@@ -48,44 +48,44 @@ export const App: React.FC<AppProps> = ({
   }, []);
   
   const handleNavigate = useCallback((direction: 'up' | 'down') => {
-    if (direction === 'up' && selectedSessionIndex > 0) {
-      setSelectedSessionIndex(selectedSessionIndex - 1);
-    } else if (direction === 'down' && selectedSessionIndex < sessions.length - 1) {
-      setSelectedSessionIndex(selectedSessionIndex + 1);
+    if (direction === 'up' && selectedTaskIndex > 0) {
+      setSelectedTaskIndex(selectedTaskIndex - 1);
+    } else if (direction === 'down' && selectedTaskIndex < tasks.length - 1) {
+      setSelectedTaskIndex(selectedTaskIndex + 1);
     }
-  }, [selectedSessionIndex, sessions.length]);
+  }, [selectedTaskIndex, tasks.length]);
   
-  const handleSessionSelect = useCallback((index: number) => {
-    if (index >= 0 && index < sessions.length) {
-      setViewingSession(sessions[index]);
+  const handleTaskSelect = useCallback((index: number) => {
+    if (index >= 0 && index < tasks.length) {
+      setViewingTask(tasks[index]);
     }
-  }, [sessions]);
+  }, [tasks]);
   
   const handleBackToMain = useCallback(() => {
-    setViewingSession(null);
+    setViewingTask(null);
   }, []);
   
-  const handleSessionDelete = useCallback((index: number) => {
-    if (index >= 0 && index < sessions.length) {
-      const sessionToDelete = sessions[index];
-      onSessionDelete(sessionToDelete.id);
-      
-      // If this was the last session, go back to input
-      if (sessions.length === 1) {
+  const handleTaskDelete = useCallback((index: number) => {
+    if (index >= 0 && index < tasks.length) {
+      const taskToDelete = tasks[index];
+      onTaskDelete(taskToDelete.id);
+
+      // If this was the last task, go back to input
+      if (tasks.length === 1) {
         setCurrentFocus('input');
-        setSelectedSessionIndex(0);
+        setSelectedTaskIndex(0);
       } else {
         // Adjust selected index if needed
-        if (selectedSessionIndex >= sessions.length - 1) {
-          setSelectedSessionIndex(Math.max(0, sessions.length - 2));
+        if (selectedTaskIndex >= tasks.length - 1) {
+          setSelectedTaskIndex(Math.max(0, tasks.length - 2));
         }
       }
     }
-  }, [sessions, selectedSessionIndex, onSessionDelete]);
+  }, [tasks, selectedTaskIndex, onTaskDelete]);
   
-  // Show messages view if a session is selected
-  if (viewingSession) {
-    return <MessagesView session={viewingSession} onBack={handleBackToMain} />;
+  // Show messages view if a task is selected
+  if (viewingTask) {
+    return <MessagesView task={viewingTask} onBack={handleBackToMain} />;
   }
   
   return (
@@ -109,17 +109,17 @@ export const App: React.FC<AppProps> = ({
         />
       </Box>
       
-      {/* Sessions List */}
+      {/* Tasks List */}
       <Box paddingX={1} marginTop={1}>
-        <Text bold color="cyan">Recent Prompts:</Text>
+        <Text bold color="cyan">Recent Tasks:</Text>
       </Box>
       <SessionsList
-        sessions={sessions}
-        selectedIndex={selectedSessionIndex}
+        tasks={tasks}
+        selectedIndex={selectedTaskIndex}
         searchPath={searchPath}
-        onSelect={handleSessionSelect}
+        onSelect={handleTaskSelect}
         onNavigate={handleNavigate}
-        onDelete={handleSessionDelete}
+        onDelete={handleTaskDelete}
         focusPrevious={handleFocusPrevious}
         isFocused={currentFocus === 'list'}
       />

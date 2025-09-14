@@ -7,11 +7,11 @@ import { render } from "ink";
 import { App } from "./components/App.js";
 import inquirer from "inquirer";
 import {
-  SessionState,
+  TaskState,
   GitRepoInfo,
   ConversationEntry,
-  SessionData,
-  IPromptSession,
+  TaskData,
+  IPromptTask,
   RepoWithBranch,
 } from "./types.js";
 import fs from "fs";
@@ -22,11 +22,11 @@ import { v4 as uuidv4 } from "uuid";
 import process from "process";
 import crypto from "crypto";
 
-class PromptSession implements IPromptSession {
+class PromptTask implements IPromptTask {
   public id: string;
   public prompt: string;
   public sandboxId: string | null;
-  public state: SessionState;
+  public state: TaskState;
   public messages: string[];
   public createdAt: Date;
   public completedAt: Date | null;
@@ -54,7 +54,7 @@ class PromptSession implements IPromptSession {
     this.repos = repos;
   }
 
-  updateState(state: SessionState): void {
+  updateState(state: TaskState): void {
     this.state = state;
   }
 
@@ -117,7 +117,7 @@ class PromptSession implements IPromptSession {
     }
   }
 
-  serialize(): SessionData {
+  serialize(): TaskData {
     return {
       id: this.id,
       prompt: this.prompt,
@@ -133,21 +133,21 @@ class PromptSession implements IPromptSession {
     };
   }
 
-  static deserialize(data: SessionData): PromptSession {
-    const session = new PromptSession(
+  static deserialize(data: TaskData): PromptTask {
+    const task = new PromptTask(
       data.id,
       data.prompt,
       data.repos || [],
       data.sandboxId || null
     );
-    session.state = data.state;
-    session.messages = data.messages || [];
-    session.createdAt = new Date(data.createdAt);
-    session.completedAt = data.completedAt ? new Date(data.completedAt) : null;
-    session.stepCount = data.stepCount || 0;
-    session.tokenCount = data.tokenCount || 0;
-    session.cost = data.cost || null;
-    return session;
+    task.state = data.state;
+    task.messages = data.messages || [];
+    task.createdAt = new Date(data.createdAt);
+    task.completedAt = data.completedAt ? new Date(data.completedAt) : null;
+    task.stepCount = data.stepCount || 0;
+    task.tokenCount = data.tokenCount || 0;
+    task.cost = data.cost || null;
+    return task;
   }
 }
 
@@ -158,20 +158,20 @@ class AgentChat {
   private logFileName: string;
   private conversation: ConversationEntry[];
   private conversationFileName: string;
-  private sandbox: any;
-  private client: any;
-  private serverUrl: string | null;
-  private sandboxInitialized: boolean;
+  private activeSandboxes: Map<
+    string,
+    { sandbox: any; client: any; serverUrl: string }
+  >;
   private searchPath: string;
   private gitRepos: GitRepoInfo[];
 
-  // Session management properties
-  private sessions: Map<string, PromptSession>;
-  private currentSession: PromptSession | null;
-  private sessionsFile: string;
-  private sessionsArray: PromptSession[] = [];
+  // Task management properties
+  private tasks: Map<string, PromptTask>;
+  private currentTask: PromptTask | null;
+  private tasksFile: string;
+  private tasksArray: PromptTask[] = [];
   private inkApp: any = null;
-  private setSessionsState: ((sessions: PromptSession[]) => void) | null = null;
+  private setTasksState: ((tasks: PromptTask[]) => void) | null = null;
 
   // Git token management
   private gitTokenFile: string;
@@ -182,27 +182,23 @@ class AgentChat {
   private togetherApiKey: string | null = null;
 
   constructor(
-    provider: string = "together",
     searchPath: string = process.cwd()
   ) {
     this.isAgentRunning = false;
     this.lastTodos = null;
-    this.provider = provider;
+    this.provider = "together";
     this.logFileName = `../agent-chat-${
       new Date().toISOString().split("T")[0]
     }.log`;
     this.conversation = [];
     this.conversationFileName = `${process.cwd()}/CONVERSATION.md`;
-    this.sandbox = null;
-    this.client = null;
-    this.serverUrl = null;
-    this.sandboxInitialized = false;
+    this.activeSandboxes = new Map();
     this.searchPath = searchPath;
     this.gitRepos = this.detectGitRepos();
 
-    // Session management properties
-    this.sessions = new Map();
-    this.currentSession = null;
+    // Task management properties
+    this.tasks = new Map();
+    this.currentTask = null;
 
     // Create .together-tasks directory if it doesn't exist
     const togetherTasksDir = path.join(os.homedir(), ".together-tasks");
@@ -210,11 +206,11 @@ class AgentChat {
       fs.mkdirSync(togetherTasksDir, { recursive: true });
     }
 
-    this.sessionsFile = path.join(togetherTasksDir, "sessions.json");
+    this.tasksFile = path.join(togetherTasksDir, "tasks.json");
     this.gitTokenFile = path.join(togetherTasksDir, "git-token");
     this.togetherApiKeyFile = path.join(togetherTasksDir, "together-key");
 
-    this.loadSessions();
+    this.loadTasks();
     this.loadGitToken();
     this.loadTogetherApiKey();
     this.checkOnboarding();
@@ -286,59 +282,59 @@ class AgentChat {
     }));
   }
 
-  private loadSessions(): void {
+  private loadTasks(): void {
     try {
-      if (fs.existsSync(this.sessionsFile)) {
-        const data = fs.readFileSync(this.sessionsFile, "utf8");
-        const sessionsData: SessionData[] = JSON.parse(data);
-        for (const sessionData of sessionsData) {
-          const session = PromptSession.deserialize(sessionData);
-          this.sessions.set(session.id, session);
+      if (fs.existsSync(this.tasksFile)) {
+        const data = fs.readFileSync(this.tasksFile, "utf8");
+        const tasksData: TaskData[] = JSON.parse(data);
+        for (const taskData of tasksData) {
+          const task = PromptTask.deserialize(taskData);
+          this.tasks.set(task.id, task);
         }
       }
-      this.updateSessionsArray();
+      this.updateTasksArray();
     } catch (error: any) {
-      console.error("Failed to load sessions:", error.message);
+      console.error("Failed to load tasks:", error.message);
     }
   }
 
-  private saveSessions(): void {
+  private saveTasks(): void {
     try {
-      const sessionsData = Array.from(this.sessions.values()).map((session) =>
-        session.serialize()
+      const tasksData = Array.from(this.tasks.values()).map((task) =>
+        task.serialize()
       );
       fs.writeFileSync(
-        this.sessionsFile,
-        JSON.stringify(sessionsData, null, 2),
+        this.tasksFile,
+        JSON.stringify(tasksData, null, 2),
         "utf8"
       );
-      this.updateSessionsArray();
+      this.updateTasksArray();
     } catch (error: any) {
-      console.error("Failed to save sessions:", error.message);
+      console.error("Failed to save tasks:", error.message);
     }
   }
 
-  private updateSessionsArray(): void {
-    this.sessionsArray = Array.from(this.sessions.values()).sort(
+  private updateTasksArray(): void {
+    this.tasksArray = Array.from(this.tasks.values()).sort(
       (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
     );
 
     // Update React state to trigger re-render
-    if (this.setSessionsState) {
-      this.setSessionsState([...this.sessionsArray]);
+    if (this.setTasksState) {
+      this.setTasksState([...this.tasksArray]);
     }
   }
 
-  private addSession(prompt: string, repos: RepoWithBranch[]): PromptSession {
-    const session = new PromptSession(uuidv4(), prompt, repos);
-    this.sessions.set(session.id, session);
-    this.saveSessions();
-    return session;
+  private addTask(prompt: string, repos: RepoWithBranch[]): PromptTask {
+    const task = new PromptTask(uuidv4(), prompt, repos);
+    this.tasks.set(task.id, task);
+    this.saveTasks();
+    return task;
   }
 
-  private deleteSession(sessionId: string): void {
-    this.sessions.delete(sessionId);
-    this.saveSessions();
+  private deleteTask(taskId: string): void {
+    this.tasks.delete(taskId);
+    this.saveTasks();
   }
 
   private encryptToken(token: string): string {
@@ -750,38 +746,50 @@ class AgentChat {
     return "";
   }
 
-  private async initializeSandbox(): Promise<boolean> {
+  private async initializeSandboxForTask(
+    taskId: string
+  ): Promise<{ sandbox: any; client: any; serverUrl: string }> {
     try {
-      const apiKey = process.env.CSB_API_KEY;
+      const apiKey = this.togetherApiKey;
       if (!apiKey) {
-        throw new Error("CSB_API_KEY environment variable is required");
+        throw new Error("Together API key is required for CodeSandbox integration");
       }
 
       const sdk = new CodeSandbox(apiKey);
-      this.sandbox = await sdk.sandboxes.create({
-        id: "pt_FpkDyrSdcfanBa3YuoxP1L", // Template ID
+      console.log(`Creating sandbox for task ${taskId}...`);
+      const sandbox = await sdk.sandboxes.create({
+        id: "pt_UbT9ojZwY6ZG9UFt5kwkwp", // Template ID
       });
+      console.log(`Sandbox created for task ${taskId}: ${sandbox.id}`);
 
-      this.client = await this.sandbox.connect();
+      const client = await sandbox.connect();
 
-      const port = await this.client.ports.waitForPort(4999, {
+      const port = await client.ports.waitForPort(4999, {
         timeoutMs: 60000,
       });
-      this.serverUrl = `https://${port.host}`;
+      const serverUrl = `https://${port.host}`;
 
-      this.sandboxInitialized = true;
-      return true;
+      const sandboxInfo = { sandbox, client, serverUrl };
+      this.activeSandboxes.set(taskId, sandboxInfo);
+
+      return sandboxInfo;
     } catch (error) {
       throw error;
     }
   }
 
   private async makeRequest(
+    taskId: string,
     endpoint: string,
     method: string = "GET",
     body: any = null
   ): Promise<any> {
-    const response = await fetch(`${this.serverUrl}${endpoint}`, {
+    const sandboxInfo = this.activeSandboxes.get(taskId);
+    if (!sandboxInfo) {
+      throw new Error(`No sandbox found for task ${taskId}`);
+    }
+
+    const response = await fetch(`${sandboxInfo.serverUrl}${endpoint}`, {
       method,
       headers: body ? { "Content-Type": "application/json" } : {},
       body: body ? JSON.stringify(body) : null,
@@ -794,7 +802,7 @@ class AgentChat {
     return response.json();
   }
 
-  async startQuery(prompt, apiKey, session?: PromptSession) {
+  async startQuery(prompt, apiKey, task?: PromptTask) {
     const requestBody = {
       prompt,
       apiKey,
@@ -808,21 +816,21 @@ class AgentChat {
       (requestBody as any).githubToken = this.gitToken;
     }
 
-    // Add repository and branch info from session if available
-    if (session?.repos && session.repos.length > 0) {
+    // Add repository and branch info from task if available
+    if (task?.repos && task.repos.length > 0) {
       // Send only the mentioned repos with their associated branch names
-      (requestBody as any).reposWithBranches = session.repos.map((repo) => ({
+      (requestBody as any).reposWithBranches = task.repos.map((repo) => ({
         repoInfo: repo.repoInfo,
         branchName: repo.branchName,
       }));
     }
 
-    return this.makeRequest("/query", "POST", requestBody);
+    return this.makeRequest(task!.id, "/query", "POST", requestBody);
   }
 
-  async pollMessages(since = null) {
+  async pollMessages(taskId: string, since = null) {
     const endpoint = since ? `/messages?since=${since}` : "/messages";
-    return this.makeRequest(endpoint);
+    return this.makeRequest(taskId, endpoint);
   }
 
   private convertSandboxMessage(message: any): any {
@@ -1067,56 +1075,36 @@ class AgentChat {
     }
   }
 
-  private async executeAgentForSession(session: PromptSession): Promise<void> {
-    const prompt = session.prompt;
+  private async executeAgentForTask(task: PromptTask): Promise<void> {
+    const prompt = task.prompt;
 
     try {
       this.isAgentRunning = true;
-      this.currentSession = session;
+      this.currentTask = task;
 
-      // Initialize sandbox if not already done
-      if (!this.sandboxInitialized) {
-        await this.initializeSandbox();
-      }
+      // Initialize a new sandbox for this task
+      const sandboxInfo = await this.initializeSandboxForTask(task.id);
 
-      // Store sandbox ID in session
-      session.sandboxId = this.sandbox.id;
+      // Store sandbox ID in task
+      task.sandboxId = sandboxInfo.sandbox.id;
 
       // Add user prompt to conversation
       this.addToConversation("user_prompt", prompt);
 
-      // Get API key for the chosen provider (using stored Together key, env vars for others)
-      let apiKey: string | undefined;
-      if (this.provider === "anthropic") {
-        apiKey = process.env.ANTHROPIC_API_KEY;
-      } else if (this.provider === "openai") {
-        apiKey = process.env.OPENAI_API_KEY;
-      } else if (this.provider === "together") {
-        apiKey = this.togetherApiKey || undefined;
-      }
-
+      // Get Together API key
+      const apiKey = this.togetherApiKey;
       if (!apiKey) {
-        if (this.provider === "together") {
-          throw new Error(
-            "Together API key not found. Please restart the CLI to set up credentials."
-          );
-        } else {
-          const keyName =
-            this.provider === "anthropic"
-              ? "ANTHROPIC_API_KEY"
-              : "OPENAI_API_KEY";
-          throw new Error(
-            `${keyName} environment variable is required for ${this.provider} provider`
-          );
-        }
+        throw new Error(
+          "Together API key not found. Please restart the CLI to set up credentials."
+        );
       }
 
       // Start the query in the sandbox
-      await this.startQuery(prompt, apiKey, session);
+      await this.startQuery(prompt, apiKey, task);
 
       // Query started successfully, update state from initialize to waiting
-      session.updateState("waiting");
-      this.saveSessions();
+      task.updateState("waiting");
+      this.saveTasks();
 
       // Poll for messages
       let lastTimestamp = null;
@@ -1126,7 +1114,7 @@ class AgentChat {
         await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait 1 second
 
         try {
-          const response = await this.pollMessages(lastTimestamp);
+          const response = await this.pollMessages(task.id, lastTimestamp);
 
           if (response.messages && response.messages.length > 0) {
             for (const message of response.messages) {
@@ -1134,24 +1122,24 @@ class AgentChat {
               const formattedMessage = this.convertSandboxMessage(message);
               const formatted = this.formatAgentOutput(formattedMessage);
               if (formatted && formatted.trim()) {
-                session.addMessage(formatted);
+                task.addMessage(formatted);
               }
 
-              // Update session state based on message type
+              // Update task state based on message type
               if (formattedMessage.type === "tool-call") {
-                session.updateState("tool_call");
+                task.updateState("tool_call");
               } else if (
                 formattedMessage.type === "text" ||
                 formattedMessage.type === "reasoning"
               ) {
-                session.updateState("thinking");
+                task.updateState("thinking");
               }
 
               // Log the raw JSON message
               this.logMessage(JSON.stringify(message, null, 2));
               lastTimestamp = message.timestamp;
             }
-            this.saveSessions();
+            this.saveTasks();
           }
 
           // Check if the session is completed or errored
@@ -1159,15 +1147,15 @@ class AgentChat {
             isCompleted = true;
 
             if (response.status === "error") {
-              session.setError();
-              session.addMessage(
-                chalk.red("❌ Session completed with error: " + response.error)
+              task.setError();
+              task.addMessage(
+                chalk.red("❌ Task completed with error: " + response.error)
               );
               this.addToConversation("error", response.error);
             } else {
-              session.setCompleted(0, 0); // TODO: get actual counts from response
+              task.setCompleted(0, 0); // TODO: get actual counts from response
             }
-            this.saveSessions();
+            this.saveTasks();
           }
         } catch (pollError: any) {
           console.error("Error polling messages:", pollError.message);
@@ -1176,21 +1164,27 @@ class AgentChat {
       }
 
       this.isAgentRunning = false;
-      this.currentSession = null;
+      this.currentTask = null;
+
+      // Clean up sandbox resources
+      this.activeSandboxes.delete(task.id);
 
       // Save conversation after each agent execution
       this.saveConversation();
     } catch (error: any) {
       this.isAgentRunning = false;
-      this.currentSession = null;
+      this.currentTask = null;
+
+      // Clean up sandbox resources on error
+      this.activeSandboxes.delete(task.id);
 
       // Add error to conversation and save
       this.addToConversation("error", error.message);
       this.saveConversation();
 
-      session.setError();
-      session.addMessage(chalk.red("💥 Error: ") + error.message);
-      this.saveSessions();
+      task.setError();
+      task.addMessage(chalk.red("💥 Error: ") + error.message);
+      this.saveTasks();
 
       throw error;
     }
@@ -1200,27 +1194,25 @@ class AgentChat {
     // Clear the screen when starting
     console.clear();
 
-    // Create a wrapper component that manages sessions state
+    // Create a wrapper component that manages tasks state
     const AppWrapper: React.FC = () => {
-      const [sessions, setSessions] = useState<PromptSession[]>(
-        this.sessionsArray
-      );
+      const [tasks, setTasks] = useState<PromptTask[]>(this.tasksArray);
 
       // Store the state setter for updates
       useEffect(() => {
-        this.setSessionsState = setSessions;
+        this.setTasksState = setTasks;
         return () => {
-          this.setSessionsState = null;
+          this.setTasksState = null;
         };
       }, []);
 
       const appProps = {
-        sessions,
+        tasks,
         gitRepos: this.gitRepos,
         searchPath: this.searchPath,
         onPromptSubmit: (prompt: string) => this.handlePromptSubmit(prompt),
-        onSessionDelete: this.handleSessionDelete.bind(this),
-        setSessionsState: setSessions,
+        onTaskDelete: this.handleTaskDelete.bind(this),
+        setTasksState: setTasks,
       };
 
       return React.createElement(App, appProps);
@@ -1238,42 +1230,42 @@ class AgentChat {
 
     // If there are repo mentions but no matches, show error
     if (repoMentions.length > 0 && mentionedRepos.length === 0) {
-      const session = new PromptSession(uuidv4(), prompt, []);
-      session.setError();
-      session.addMessage(
+      const task = new PromptTask(uuidv4(), prompt, []);
+      task.setError();
+      task.addMessage(
         `❌ Error: No matching repositories found for mentions: ${repoMentions
           .map((m) => "@" + m)
           .join(", ")}`
       );
-      this.sessions.set(session.id, session);
-      this.saveSessions();
+      this.tasks.set(task.id, task);
+      this.saveTasks();
       return;
     }
 
     // If repos are available but none are mentioned, require explicit mention (no fallback to all repos)
     if (repoMentions.length === 0 && this.gitRepos.length > 0) {
-      const session = new PromptSession(uuidv4(), prompt, []);
-      session.setError();
+      const task = new PromptTask(uuidv4(), prompt, []);
+      task.setError();
       const availableRepos = this.gitRepos
         .map((repo) => `@${repo.folderName}`)
         .join(", ");
-      session.addMessage(
+      task.addMessage(
         `❌ Error: ${this.gitRepos.length} repositories detected but none mentioned in your request. Please specify which repository to work with by adding one of: ${availableRepos}`
       );
-      this.sessions.set(session.id, session);
-      this.saveSessions();
+      this.tasks.set(task.id, task);
+      this.saveTasks();
       return;
     }
 
     // If no repositories are available at all, show error
     if (this.gitRepos.length === 0) {
-      const session = new PromptSession(uuidv4(), prompt, []);
-      session.setError();
-      session.addMessage(
+      const task = new PromptTask(uuidv4(), prompt, []);
+      task.setError();
+      task.addMessage(
         "❌ Error: No git repositories found. Please ensure repositories are available in the search directory."
       );
-      this.sessions.set(session.id, session);
-      this.saveSessions();
+      this.tasks.set(task.id, task);
+      this.saveTasks();
       return;
     }
 
@@ -1292,28 +1284,24 @@ class AgentChat {
       updatedPrompt
     );
 
-    // Create session and immediately add to list in initialize state
-    const session = new PromptSession(
-      uuidv4(),
-      updatedPrompt,
-      reposWithBranches
-    );
-    this.currentSession = session;
+    // Create task and immediately add to list in initialize state
+    const task = new PromptTask(uuidv4(), updatedPrompt, reposWithBranches);
+    this.currentTask = task;
 
-    // Immediately add to sessions and save
-    this.sessions.set(session.id, session);
-    this.saveSessions();
+    // Immediately add to tasks and save
+    this.tasks.set(task.id, task);
+    this.saveTasks();
 
-    // Execute the agent for this session in background
-    this.executeAgentForSession(session).catch((error) => {
+    // Execute the agent for this task in background
+    this.executeAgentForTask(task).catch((error) => {
       console.error("Agent execution error:", error);
-      session.setError();
-      this.saveSessions();
+      task.setError();
+      this.saveTasks();
     });
   }
 
-  private handleSessionDelete(sessionId: string): void {
-    this.deleteSession(sessionId);
+  private handleTaskDelete(taskId: string): void {
+    this.deleteTask(taskId);
     // Re-render will happen automatically due to state update
   }
 
@@ -1336,9 +1324,7 @@ function clearPersistence() {
       console.log(
         chalk.green(`✓ Cleared .together-tasks directory and all its contents`)
       );
-      console.log(
-        chalk.green(`✓ All sessions, tokens, and cached data removed.`)
-      );
+      console.log(chalk.green(`✓ All tasks, tokens, and cached data removed.`));
     } else {
       console.log(chalk.yellow("No .together-tasks directory found to clear."));
     }
@@ -1352,44 +1338,25 @@ function clearPersistence() {
 // Parse command line arguments
 function parseArgs() {
   const args = process.argv.slice(2);
-  let provider = "together"; // default
   let searchPath = process.cwd(); // default to current directory
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--provider" && i + 1 < args.length) {
-      const providerArg = args[i + 1];
-      if (
-        providerArg === "anthropic" ||
-        providerArg === "openai" ||
-        providerArg === "together"
-      ) {
-        provider = providerArg;
-      } else {
-        console.error(
-          "Error: provider must be 'anthropic', 'openai', or 'together'"
-        );
-        process.exit(1);
-      }
-      i++; // Skip the next argument
-    } else if (args[i] === "--clear") {
+    if (args[i] === "--clear") {
       clearPersistence();
       process.exit(0);
     } else if (args[i] === "--help" || args[i] === "-h") {
       console.log(
-        "Usage: node index.js [path] [--provider <provider>] [--clear]"
+        "Usage: node index.js [path] [--clear]"
       );
       console.log(
         "  path: Directory to search for git repositories (default: current directory)"
       );
-      console.log(
-        "  --provider: AI provider to use: anthropic, openai, or together (default: together)"
-      );
-      console.log("  --clear: Clear all sessions, tokens, and cached data");
+      console.log("  --clear: Clear all tasks, tokens, and cached data");
       console.log("\nExamples:");
       console.log("  node index.js .");
       console.log("  node index.js ..");
       console.log("  node index.js ./foo");
-      console.log("  node index.js /path/to/projects --provider anthropic");
+      console.log("  node index.js /path/to/projects");
       console.log("  node index.js --clear");
       process.exit(0);
     } else if (!args[i].startsWith("--") && i === 0) {
@@ -1410,7 +1377,7 @@ function parseArgs() {
     process.exit(1);
   }
 
-  return { provider, searchPath };
+  return { searchPath };
 }
 
 // Handle Ctrl+C gracefully
@@ -1420,6 +1387,6 @@ process.on("SIGINT", () => {
 });
 
 // Start the chat
-const { provider, searchPath } = parseArgs();
-const chat = new AgentChat(provider, searchPath);
+const { searchPath } = parseArgs();
+const chat = new AgentChat(searchPath);
 chat.run().catch(console.error);

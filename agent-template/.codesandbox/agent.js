@@ -101,8 +101,17 @@ async function cloneRepositories(reposWithBranches, workingDirectory) {
       
       console.log(`Cloning ${repoInfo.remoteUrl} into ${repoInfo.folderName} with branch ${branchName}`);
       
+      // Convert SSH URLs to HTTPS URLs for autonomous operation
+      let cloneUrl = repoInfo.remoteUrl;
+      if (cloneUrl.startsWith('git@github.com:')) {
+        cloneUrl = cloneUrl.replace('git@github.com:', 'https://github.com/');
+        if (!cloneUrl.endsWith('.git')) {
+          cloneUrl += '.git';
+        }
+      }
+
       // Clone the repository (since we're in a clean workspace, no need to check if directory exists)
-      execSync(`git clone ${repoInfo.remoteUrl} ${repoInfo.folderName}`, {
+      execSync(`git clone ${cloneUrl} ${repoInfo.folderName}`, {
         cwd: workingDirectory,
         stdio: "pipe"
       });

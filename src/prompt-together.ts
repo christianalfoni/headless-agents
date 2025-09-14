@@ -115,7 +115,7 @@ export async function* streamPrompt(config: {
         // - "functions.toolName" for regular tool calls
         // - "<|constrain|>toolName" for structured/constrained tool calls (tools with strict JSON schemas)
         // Note: There's a bug in openai-harmony where recipients sometimes include channel markers
-        // like "functions.toolName<|channel|>commentary" instead of just "functions.toolName"
+        // like "functions.toolName<|channel|>commentary" or "<|call|>" tags
         if (message.recipient && (message.recipient.startsWith("functions.") || message.recipient.startsWith("<|constrain|>"))) {
           hasToolCalls = true;
           
@@ -123,16 +123,32 @@ export async function* streamPrompt(config: {
           let toolName: string;
           if (message.recipient.startsWith("functions.")) {
             // Regular tool calls: "functions.bash" -> "bash"
-            // Handle cases like "functions.write_todos<|channel|>commentary" -> "write_todos"
+            // Handle cases like "functions.write_todos<|channel|>commentary" or "functions.bash<|call|>" -> "write_todos" or "bash"
             const afterFunctions = message.recipient.substring("functions.".length);
             const channelIndex = afterFunctions.indexOf("<|channel|>");
-            toolName = channelIndex !== -1 ? afterFunctions.substring(0, channelIndex) : afterFunctions;
+            const callIndex = afterFunctions.indexOf("<|call|>");
+
+            if (channelIndex !== -1) {
+              toolName = afterFunctions.substring(0, channelIndex);
+            } else if (callIndex !== -1) {
+              toolName = afterFunctions.substring(0, callIndex);
+            } else {
+              toolName = afterFunctions;
+            }
           } else if (message.recipient.startsWith("<|constrain|>")) {
             // Constrained tool calls: "<|constrain|>write_todos" -> "write_todos"
             // Used for tools that require strict JSON schema adherence
             const afterConstrain = message.recipient.substring("<|constrain|>".length);
             const channelIndex = afterConstrain.indexOf("<|channel|>");
-            toolName = channelIndex !== -1 ? afterConstrain.substring(0, channelIndex) : afterConstrain;
+            const callIndex = afterConstrain.indexOf("<|call|>");
+
+            if (channelIndex !== -1) {
+              toolName = afterConstrain.substring(0, channelIndex);
+            } else if (callIndex !== -1) {
+              toolName = afterConstrain.substring(0, callIndex);
+            } else {
+              toolName = afterConstrain;
+            }
           } else {
             toolName = message.recipient;
           }
@@ -140,14 +156,19 @@ export async function* streamPrompt(config: {
           // Parse the JSON content as tool call arguments
           let parsedArgs;
           let toolCallContent = "";
-          
+
           for (const content of message.content) {
             if (content.type === "text") {
               toolCallContent = content.text;
               break;
             }
           }
-          
+
+          // Remove <|call|> tag from the end of tool call content if present
+          if (toolCallContent.endsWith("<|call|>")) {
+            toolCallContent = toolCallContent.slice(0, -"<|call|>".length);
+          }
+
           try {
             parsedArgs = JSON.parse(toolCallContent);
           } catch (error) {

@@ -1,5 +1,5 @@
 // Shared type definitions
-export type SessionState = "initialize" | "waiting" | "thinking" | "tool_call" | "completed" | "error";
+export type TaskState = "initialize" | "waiting" | "thinking" | "tool_call" | "completed" | "error";
 
 export interface GitRepoInfo {
   isGitRepo: boolean;
@@ -21,11 +21,11 @@ export interface RepoWithBranch {
   branchName: string;
 }
 
-export interface SessionData {
+export interface TaskData {
   id: string;
   prompt: string;
   sandboxId?: string | null;
-  state: SessionState;
+  state: TaskState;
   messages: string[];
   createdAt: string;
   completedAt?: string | null;
@@ -37,21 +37,21 @@ export interface SessionData {
 
 export interface TableChoice {
   action: "view" | "new" | "delete" | "quit";
-  sessionId?: string;
+  taskId?: string;
 }
 
 export interface UIChoice {
-  type: "prompt" | "session" | "action";
+  type: "prompt" | "task" | "action";
   value: string;
-  sessionId?: string;
+  taskId?: string;
 }
 
-// Class interface for PromptSession
-export interface IPromptSession {
+// Class interface for PromptTask
+export interface IPromptTask {
   id: string;
   prompt: string;
   sandboxId: string | null;
-  state: SessionState;
+  state: TaskState;
   messages: string[];
   createdAt: Date;
   completedAt: Date | null;
@@ -59,12 +59,12 @@ export interface IPromptSession {
   tokenCount: number;
   cost: number | null;
   repos: RepoWithBranch[];
-  
-  updateState(state: SessionState): void;
+
+  updateState(state: TaskState): void;
   addMessage(message: string): void;
   setCompleted(stepCount: number, tokenCount: number, cost: number | null): void;
   setError(): void;
   getStateIcon(): string;
   getStateText(): string;
-  serialize(): SessionData;
+  serialize(): TaskData;
 }

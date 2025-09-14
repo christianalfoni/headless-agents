@@ -2,21 +2,21 @@ import React, { useState, useEffect, useMemo } from "react";
 import { Box, Text, useInput, useApp } from "ink";
 import open from "open";
 
-import { IPromptSession } from '../types.js';
+import { IPromptTask } from '../types.js';
 
 interface MessagesViewProps {
-  session: IPromptSession;
+  task: IPromptTask;
   onBack: () => void;
 }
 
-export const MessagesView: React.FC<MessagesViewProps> = ({ session, onBack }) => {
+export const MessagesView: React.FC<MessagesViewProps> = ({ task, onBack }) => {
   const [scrollOffset, setScrollOffset] = useState(0);
   const { exit } = useApp();
   
   // Reset scroll to top when component mounts
   useEffect(() => {
     setScrollOffset(0);
-  }, [session.id]);
+  }, [task.id]);
   
   useInput((inputText, key) => {
     if (key.escape) {
@@ -28,22 +28,22 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ session, onBack }) =
       setScrollOffset(prev => Math.max(0, prev - 1));
     } else if (key.shift && key.downArrow) {
       // Scroll down
-      setScrollOffset(prev => Math.min(session.messages.length - 1, prev + 1));
+      setScrollOffset(prev => Math.min(task.messages.length - 1, prev + 1));
     }
   });
   
   // Simply use the messages as they come from the sandbox endpoint
-  const messages = session.messages.filter(message => message && message.trim());
+  const messages = task.messages.filter(message => message && message.trim());
   
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
       {/* Header */}
       <Box flexDirection="column" marginBottom={1}>
-        {session.sandboxId && (
-          <Text color="cyan">📦 Sandbox: https://codesandbox.io/s/{session.sandboxId}</Text>
+        {task.sandboxId && (
+          <Text color="cyan">📦 Sandbox: https://codesandbox.io/s/{task.sandboxId}</Text>
         )}
-        <Text bold>Prompt: {session.prompt}</Text>
-        <Text>Status: {session.getStateIcon()} {session.getStateText()}</Text>
+        <Text bold>Task: {task.prompt}</Text>
+        <Text>Status: {task.getStateIcon()} {task.getStateText()}</Text>
         <Text color="gray">Press ESC to go back | Shift+↑↓ to scroll</Text>
       </Box>
       

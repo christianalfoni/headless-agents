@@ -114,27 +114,18 @@ export const InputField: React.FC<InputFieldProps> = ({ onSubmit, focusNext, git
 
   const handleRepoSelection = () => {
     if (showRepoSuggestion && topRepo) {
-      // Find the extent of the current mention text to replace
-      const textBeforeCursor = input.substring(0, cursorPosition);
-      const textAfterCursor = input.substring(cursorPosition);
-      
-      // Find where the mention starts and ends
+      // Find where the mention starts
       const beforeAt = input.substring(0, atPosition);
-      
-      // Find the end of the current mention (either space or end of input)
-      let mentionEndPos = cursorPosition;
-      for (let i = atPosition + 1; i < input.length; i++) {
-        if (input[i] === ' ') {
-          mentionEndPos = i;
-          break;
-        }
-        if (i === input.length - 1) {
-          mentionEndPos = input.length;
-        }
-      }
-      
-      const afterMentionText = input.substring(mentionEndPos);
-      const newInput = beforeAt + '@' + topRepo.folderName + ' ' + afterMentionText;
+
+      // Find the end of the current partial mention
+      // We should only replace from @ to the cursor position, not beyond
+      const textAfterAt = input.substring(atPosition + 1, cursorPosition);
+
+      // Find if there's a space after the cursor that we should preserve
+      const textAfterCursor = input.substring(cursorPosition);
+
+      // The new input replaces only the partial mention (from @ to cursor)
+      const newInput = beforeAt + '@' + topRepo.folderName + ' ' + textAfterCursor;
       
       // Set cursor position after the inserted repo name and space
       const newCursorPos = beforeAt.length + 1 + topRepo.folderName.length + 1; // +1 for @, +1 for space
